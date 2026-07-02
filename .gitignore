@@ -12,13 +12,12 @@ dist/
 .vscode/
 .idea/
 
-# App packaging
-*.egg-info/
-.eggs/
+# Flet/Flutter build artifacts
+android/build/
+android/.dart_tool/
 
-# Flet build
-apk_build/build/apk/
-apk_build/build/outputs/
+# Copied shared during build
+android/shared/
 
 # OS
 .DS_Store
