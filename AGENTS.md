@@ -51,4 +51,4 @@ python main.py
 | 平台 | 方式 | 命令 |
 |------|------|------|
 | Windows EXE | PyInstaller | cd desktop && build.bat |
-| Android APK | GitHub Actions | git push → 五端构建 |
+| Android APK | GitHub Actions | git push → 自动构建 |
