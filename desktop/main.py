@@ -35,9 +35,21 @@ ZODIAC_MAP = ['鼠','牛','虎','兔','龍','蛇','馬','羊','猴','雞','狗',
 
 # ---- shared prediction engine ----
 import sys, os
-_sd = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'shared')
-if _sd not in sys.path:
-    sys.path.insert(0, _sd)
+_cur = os.path.dirname(os.path.abspath(__file__))
+# Try multiple paths for shared engine (dev + packaged)
+for _sd in [
+    os.path.abspath(os.path.join(_cur, "..", "shared")),
+    os.path.abspath(os.path.join(_cur, "shared")),
+    os.path.abspath(os.path.join(_cur, "..", "..", "shared")),
+]:
+    if os.path.isdir(_sd) and _sd not in sys.path:
+        sys.path.insert(0, _sd)
+        break
+else:
+    # Fallback: if running from project root
+    _fallback = os.path.abspath(os.path.join(_cur, "shared"))
+    if os.path.isdir(_fallback) and _fallback not in sys.path:
+        sys.path.insert(0, _fallback)
 from engine import (
     LotteryAnalyzer, MarkovChainModel, MonteCarloModel, WeightedEMAModel,
     SimpleSpecialPredictor, AdversarialPredictor, EightLinePredictor,
