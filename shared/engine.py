@@ -543,6 +543,16 @@ class SimpleSpecialPredictor:
                 appeared.add(nums[6])
         return set(range(1, 50)) - appeared
 
+    def _cold_bonus(self, n):
+        """Cold number bonus proportional to absence streak, capped at 40"""
+        streak = 0
+        for r_data in reversed(self.a.data):
+            nums = self.a.get_numbers(r_data)
+            if len(nums) >= 7 and nums[6] == n:
+                break
+            streak += 1
+        return min(40.0, 5.0 + streak * 0.8)
+
     def _streak_analysis(self, last_n=20):
         """单双和波色连势分析"""
         sp = self.a.special_code_history(last_n)
@@ -634,7 +644,7 @@ class SimpleSpecialPredictor:
 
             # 3. 冷号加分: 40期以上未在正特出现
             if n in cold:
-                s += 20
+                s += self._cold_bonus(n)
 
             # 4. 单双反转信号: 连4次单则双加分
             wave_name, _ = num_to_wave(n)
@@ -1462,6 +1472,8 @@ class EnsemblePredictor:
         self._surprise_history = []
         self._ensemble_misses = 0  # 连续未命中计数
         self._explore_boost = 1.0  # 探索系数(漂移时增大)
+        self._pred_history = []  # prediction diversity tracker
+        self._predict_counter = 0  # sliding window recalibration
         if not fast and len(a.data) >= 60:
             self._calibrate_from_history()
         else:
@@ -1665,7 +1677,7 @@ class EnsemblePredictor:
             n = self._pulls.get(name, 1)
             avg = self._rewards[name] / max(n, 1)
             explore = math.sqrt(2 * math.log(max(total_pulls, 2)) / max(n, 1))
-            self._ucb_weights[name] = avg + explore * 0.3
+            self._ucb_weights[name] = avg + explore * 0.8
         wt = sum(max(v, 0.01) for v in self._ucb_weights.values())
         for name in self._ucb_weights:
             self._ucb_weights[name] = max(self._ucb_weights[name], 0.01) / wt
@@ -1775,9 +1787,8 @@ class EnsemblePredictor:
         return sorted(cal, key=cal.get, reverse=True)[:count]
 
     def adapt(self, actual_special):
-        """自适应偏移修复: 检测漂移并调整探索率"""
         drift_triggered = False
-        if hasattr(self, '_last_special_pred'):
+        if hasattr(self, "_last_special_pred"):
             hit = 1 if actual_special in self._last_special_pred else 0
             if hit:
                 self._ensemble_misses = 0
@@ -1787,13 +1798,22 @@ class EnsemblePredictor:
                 if self._ensemble_misses >= 3:
                     self._explore_boost = min(3.0, self._explore_boost + 0.3)
                     drift_triggered = True
-            # 同步让Simple也自适应
-            if hasattr(self, 'simple'):
+                if self._ensemble_misses >= 5:
+                    self._ucb_weights = {k: 0.25 for k in self._arms}
+                    self._pulls = {k: 1 for k in self._arms}
+                    self._rewards = {k: 0.0 for k in self._arms}
+                    self._ensemble_misses = 0
+                    drift_triggered = True
+            if hasattr(self, "simple"):
                 self.simple.adapt(actual_special)
         return drift_triggered
 
     def predict_specials(self, count=8):
         phase = self._detect_phase()
+        # Sliding window recalibration every 15 predictions
+        self._predict_counter += 1
+        if self._predict_counter % 15 == 0 and len(self.a.data) >= 60:
+            self._calibrate_from_history()
         sp = self.a.special_code_history(30)
         as_ = self.adversarial.predict_specials(count)
         ms = self.markov.predict_specials(count)
@@ -1807,14 +1827,36 @@ class EnsemblePredictor:
             for i, n in enumerate(pred[:count]):
                 scores[n] += w * (count - i)
         freq_10 = Counter(s["number"] for s in sp[-10:])
-        for n in scores:
+        for n in list(scores.keys()):
             if freq_10.get(n, 0) >= 2: scores[n] *= 0.5
             if n not in freq_10: scores[n] *= 1.3
         cal = self._calibrate_probs(dict(scores))
         result = sorted(cal, key=cal.get, reverse=True)[:count]
+        
+        # Prediction diversity: exponential decay on repeat predictions
+        for n in list(scores.keys()):
+            recent_pred_count = sum(1 for past_preds in self._pred_history[-5:]
+                                    for p in past_preds if p == n)
+            if recent_pred_count >= 1:
+                scores[n] *= 0.85 ** recent_pred_count
+        cal2 = self._calibrate_probs(dict(scores))
+        result = sorted(cal2, key=cal2.get, reverse=True)[:count]
+        
+        # Random injection: 35% chance to replace 1-3 with cold numbers
+        import random as _random
+        sp_nums_set = set(s["number"] for s in sp[-30:])
+        cold_pool = [n for n in range(1, 50) if n not in sp_nums_set]
+        if cold_pool and _random.random() < 0.20:
+            replace_count = _random.randint(1, min(2, len(cold_pool)))
+            for _ in range(replace_count):
+                pos = _random.randint(0, count - 1)
+                result[pos] = _random.choice(cold_pool)
+        
         self._last_special_pred = result
+        self._pred_history.append(list(result))
+        if len(self._pred_history) > 20:
+            self._pred_history.pop(0)
         return result
-
     def predict_waves(self, count=1):
         sp = self.a.special_code_history(30)
         waves = [num_to_wave(s["number"])[0] for s in sp]
