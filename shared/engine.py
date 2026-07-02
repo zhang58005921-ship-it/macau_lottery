@@ -7,7 +7,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime
 import threading
-from . import macaujc_api
+from . from . import macaujc_api
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -26,7 +26,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime
 import threading
-import macaujc_api
+from . import macaujc_api
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
