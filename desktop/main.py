@@ -2,13 +2,11 @@
 
 import tkinter as tk
 from tkinter import ttk
-import sys, json, os, ssl, random, math, itertools
+import sys, json, os, ssl, random, math
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime
 import threading
-import macaujc_api
-import tkinter.messagebox as messagebox
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -35,106 +33,7 @@ PUR = "#7b2ff7"
 
 ZODIAC_MAP = ['鼠','牛','虎','兔','龍','蛇','馬','羊','猴','雞','狗','豬']
 
-# 农历新年日期 (生肖年切换点)
-_LUNAR_NEW_YEAR = {
-    "2023-01-22": "兔",
-    "2024-02-10": "龍",
-    "2025-01-29": "蛇",
-    "2026-02-17": "馬"
-}
-
-ZODIAC_YEAR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zodiac_year_config.json")
-
-def _load_zodiac_year_config():
-    if os.path.exists(ZODIAC_YEAR_FILE):
-        with open(ZODIAC_YEAR_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"2023": "兔", "2024": "龍", "2025": "蛇", "2026": "馬"}
-
-def _get_zodiac_mapping():
-    cfg = _load_zodiac_year_config()
-    years = sorted(cfg.keys())
-    return {y: cfg[y] for y in years}
-
-_DEFAULT_ZODIAC_MAP = _get_zodiac_mapping()
-
-
-def _get_year_zodiac(date_str):
-    """根据日期返回该年本命生肖 (格式: YYYY-MM-DD HH:MM:SS)"""
-    if not date_str or len(date_str) < 10:
-        return "馬"  # 默认2026马年
-    d = date_str[:10]
-    zodiac = "馬"
-    for date, z in sorted(_LUNAR_NEW_YEAR.items()):
-        if d >= date:
-            zodiac = z
-    return zodiac
-
-def num_to_zodiac(num, date_str=None):
-    """号码→生肖，支持按农历年自动切换
-    注意: 澳门彩使用逆序生肖循环 (zi - (n-1)) % 12, 而非标准 (zi + (n-1)) % 12"""
-    n = int(num)
-    if n < 1 or n > 49:
-        return '?'
-    if date_str is None:
-        # 默认使用2026马年映射
-        year_z = "馬"
-    else:
-        year_z = _get_year_zodiac(date_str)
-    zi = ZODIAC_MAP.index(year_z)
-    return ZODIAC_MAP[(zi - (n - 1)) % 12]
-
-def num_to_wuxing(n):
-    """五行映射: 金木水火土"""
-    m = {1:'水',2:'水',3:'木',4:'木',5:'木',6:'火',7:'火',8:'火',9:'金',10:'金',11:'金',
-         12:'水',13:'水',14:'木',15:'木',16:'木',17:'火',18:'火',19:'火',20:'金',21:'金',22:'金',
-         23:'水',24:'水',25:'木',26:'木',27:'木',28:'火',29:'火',30:'火',31:'金',32:'金',33:'金',
-         34:'水',35:'水',36:'木',37:'木',38:'木',39:'火',40:'火',41:'火',42:'金',43:'金',44:'金',
-         45:'水',46:'水',47:'木',48:'木',49:'木'}
-    return m.get(n,'?')
-# 红蓝绿波映射
-def num_to_wave(n):
-    red   = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
-    blue  = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
-    green = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
-    n = int(n)
-    if n in red:   return ("红波", "#ff4444")
-    if n in blue:  return ("蓝波", "#4488ff")
-    if n in green: return ("绿波", "#44cc44")
-    return ("?", "#888")
-
-# 单双映射
-def num_to_odd_even(n):
-    n = int(n)
-    return ("单", "#ff8c00") if n % 2 == 1 else ("双", "#8888ff")
-
-
-def fetch_data(year=None):
-    """使用 macaujc_api 获取历史数据"""
-    years = [year] if year else [2023, 2024, 2025, 2026]
-    return macaujc_api.fetch_all(years)
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-        # 去重: 按expect保留首次出现
-        seen = set()
-        deduped = []
-        for r in raw:
-            exp = r.get("expect", "")
-            if exp not in seen:
-                seen.add(exp)
-                deduped.append(r)
-        if len(deduped) < len(raw):
-            save_data(deduped)  # 回写去重后的数据
-        return deduped
-    return fetch_data()
-
-def save_data(data):
-    with open(DATA_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ---- 共享预测引擎 ----
+# ---- shared prediction engine ----
 import sys, os
 _sd = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'shared')
 if _sd not in sys.path:
@@ -142,11 +41,117 @@ if _sd not in sys.path:
 from engine import (
     LotteryAnalyzer, MarkovChainModel, MonteCarloModel, WeightedEMAModel,
     SimpleSpecialPredictor, AdversarialPredictor, EightLinePredictor,
-    EnsemblePredictor, sync_latest
+    EnsemblePredictor, sync_latest,
+    num_to_zodiac, num_to_wuxing, num_to_wave, num_to_odd_even,
+    load_data as _engine_load_data, save_data as _engine_save_data,
+    ZODIAC_MAP as _ENGINE_ZODIAC_MAP
 )
-# 更新数据文件路径指向 shared 目录
+# Override ZODIAC_MAP with engine version
+ZODIAC_MAP[:] = list(_ENGINE_ZODIAC_MAP)
+# Data file redirect to shared/
 DATA_FILE = os.path.join(_sd, 'macaujc_data.json')
-ZODIAC_YEAR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'zodiac_year_config.json')
+import macaujc_api
+import tkinter.messagebox as messagebox
+
+def load_data():
+    return _engine_load_data()
+
+def save_data(data):
+    return _engine_save_data(data)
+
+class DecisionAuditor:
+    """决策审计系统 — 回测预测 vs 实际结果，验证博弈模型有效性"""
+    def __init__(self, data):
+        self.data = sorted(data, key=lambda x: int(x.get("expect", 0)))
+        self.results = []  # [(期号, 预测生肖, 实际生肖, 预测特码, 实际特码, 命中数)]
+
+    def backtest(self, start_idx=100, window=30):
+        """滑动窗口回测：用前N期数据训练，预测下一期，记录结果"""
+        self.results = []
+        for i in range(start_idx, len(self.data) - 1, window):
+            train_data = self.data[:i]
+            test_record = self.data[i]
+
+            if len(train_data) < 50:
+                continue
+
+            analyzer = LotteryAnalyzer(train_data)
+            ensemble = EnsemblePredictor(analyzer)
+
+            # 预测
+            pred_zodiacs = ensemble.predict_zodiacs(4)
+            pred_specials = ensemble.predict_specials(7)
+
+            # 实际
+            actual_nums = analyzer.get_numbers(test_record)
+            actual_zodiacs = [num_to_zodiac(n) for n in actual_nums[:7]] if actual_nums else []
+            actual_special = actual_nums[6] if len(actual_nums) >= 7 else 0
+
+            # 命中计算
+            z_hits = len(set(pred_zodiacs) & set(actual_zodiacs))
+            s_hit = 1 if actual_special in pred_specials else 0
+
+            self.results.append({
+                "expect": test_record.get("expect"),
+                "pred_zodiacs": pred_zodiacs,
+                "actual_zodiacs": list(set(actual_zodiacs)),
+                "pred_specials": pred_specials,
+                "actual_special": actual_special,
+                "zodiac_hits": z_hits,
+                "special_hit": s_hit,
+            })
+
+        return self.results
+
+    def summary(self):
+        """生成审计摘要"""
+        if not self.results:
+            return {"error": "no results"}
+        total = len(self.results)
+        z_hits = sum(r["zodiac_hits"] for r in self.results)
+        s_hits = sum(r["special_hit"] for r in self.results)
+        max_z = total * 4  # 每期预测4个生肖
+
+        # 滑动命中率（最近N期加权）
+        recent_hits = []
+        for i, r in enumerate(self.results):
+            weight = min(1.0, (i + 1) / max(total, 1))  # 近期权重更高
+            recent_hits.append(r["zodiac_hits"] / 4.0 * weight)
+
+        return {
+            "total_tests": total,
+            "zodiac_hit_rate": round(z_hits / max(max_z, 1) * 100, 1),
+            "special_hit_rate": round(s_hits / max(total, 1) * 100, 1),
+            "weighted_zodiac_rate": round(sum(recent_hits) / max(len(recent_hits), 1) * 100, 1),
+            "last_10_hits": sum(r["zodiac_hits"] for r in self.results[-10:]),
+            "last_10_special": sum(r["special_hit"] for r in self.results[-10:]),
+            "results": self.results[-5:],  # 最近5期详情
+        }
+
+    def audit_report(self):
+        """生成完整审计报告文本"""
+        s = self.summary()
+        if "error" in s:
+            return s["error"]
+        lines = [
+            f"=== 决策审计报告 ===",
+            f"回测样本: {s['total_tests']} 期",
+            f"生肖命中率: {s['zodiac_hit_rate']}%",
+            f"特码命中率: {s['special_hit_rate']}%",
+            f"近期加权命中率: {s['weighted_zodiac_rate']}%",
+            f"近10期生肖命中: {s['last_10_hits']}/40",
+            f"近10期特码命中: {s['last_10_special']}/10",
+            f"",
+            f"--- 最近5期详情 ---",
+        ]
+        for r in s["results"]:
+            lines.append(
+                f"#{r['expect']}: 预测={','.join(r['pred_zodiacs'][:3])} "
+                f"实际={','.join(r['actual_zodiacs'][:4])} "
+                f"命中={r['zodiac_hits']}/4 特码={'中' if r['special_hit'] else '失'}"
+            )
+        return "\n".join(lines)
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -263,7 +268,7 @@ class App:
         sf.pack(fill=tk.X, pady=(0,10))
         tk.Label(sf, text="模型:", fg=SUB, bg=BG, font=("Segoe UI",10)).pack(side=tk.LEFT, padx=(0,8))
         self.mv = tk.StringVar(value="集成模型")
-        mm = ttk.Combobox(sf, textvariable=self.mv, values=["集成模型","对抗博弈","Simple(轻量)","Markov Chain","Monte Carlo","Weighted EMA","Frequency"], state="readonly", width=16)
+        mm = ttk.Combobox(sf, textvariable=self.mv, values=["集成模型","Markov Chain","Monte Carlo","Weighted EMA","Frequency"], state="readonly", width=16)
         mm.pack(side=tk.LEFT)
         mm.bind("<<ComboboxSelected>>", lambda e: self._up_predict())
         tk.Button(sf, text="开始预测", command=self._up_predict, bg=GRN, fg="#000", font=("Segoe UI",10,"bold"), relief="flat", padx=16, pady=4, cursor="hand2").pack(side=tk.RIGHT)
@@ -304,46 +309,29 @@ class App:
         lt = self.data[-1]
         nums = a.get_numbers(lt)
         zods = a.get_zodiacs(lt)
-        # ---- 自适应偏移修复：反馈上期结果 ----
-        if len(nums) >= 7:
-            actual_sp = nums[6]
-            actual_zods = set(zods)
-            try:
-                self.ensemble.adapt(actual_sp)
-                self.ensemble.feedback(actual_zods, actual_sp)
-            except Exception:
-                pass
         ns = "  ".join("{}".format(n)+"("+num_to_zodiac(n)+")" for n in nums)
         self.ll.config(text="#" + str(lt.get("expect","?")) + " | " + str(lt.get("openTime","")) + chr(10) + ns)
         m = self.mv.get()
-        if m == "对抗博弈":
-            t = a.predict_triple_zodiac()
-            q = a.predict_quad_zodiac()
-            s = self.ensemble.adversarial.predict_specials(8)
-        elif m == "Simple(轻量)":
-            t = a.predict_triple_zodiac()
-            q = a.predict_quad_zodiac()
-            s = self.ensemble.simple.predict(8)
-        elif m == "Markov Chain":
+        if m == "Markov Chain":
             t = self.ensemble.markov.predict_zodiacs(3)
             q = self.ensemble.markov.predict_zodiacs(4)
-            s = self.ensemble.markov.predict_specials(8)
+            s = self.ensemble.markov.predict_specials(7)
         elif m == "Monte Carlo":
             t = self.ensemble.monte.predict_zodiacs(3)
             q = self.ensemble.monte.predict_zodiacs(4)
-            s = self.ensemble.monte.predict_specials(8)
+            s = self.ensemble.monte.predict_specials(7)
         elif m == "Weighted EMA":
             t = self.ensemble.ema.predict_zodiacs(3)
             q = self.ensemble.ema.predict_zodiacs(4)
-            s = self.ensemble.ema.predict_specials(8)
+            s = self.ensemble.ema.predict_specials(7)
         elif m == "Frequency":
             t = a.predict_triple_zodiac()
             q = a.predict_quad_zodiac()
-            s = a.predict_special_codes(8)
+            s = a.predict_special_codes(7)
         else:
             t = self.ensemble.predict_zodiacs(3)
             q = self.ensemble.predict_zodiacs(4)
-            s = self.ensemble.predict_specials(8)
+            s = self.ensemble.predict_specials(7)
         self.tl.config(text="  ".join("[{}]".format(z) for z in t))
         self.ql.config(text="  ".join("[{}]".format(z) for z in q))
         for w in self.sl_labels:
@@ -357,8 +345,8 @@ class App:
             lbl.pack(side=tk.LEFT)
             self.sl_labels.append(lbl)
         from datetime import datetime
-        waves = self.ensemble.predict_waves(1)
-        oe_pred = self.ensemble.predict_odd_even(1)
+        waves = self.ensemble.predict_waves(2)
+        oe_pred = self.ensemble.predict_odd_even(2)
         # 一码中特
         top_one = s[0]
         oz = num_to_zodiac(top_one)
