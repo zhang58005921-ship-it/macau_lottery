@@ -182,11 +182,24 @@ class MacauApp:
             btn("追踪", 3),
         ]
         self.tab_row = ft.Row(
-            controls=self.tab_btns,
+
+            controls=self.tab_btns + [
+                ft.Button(
+                    content=ft.Text("录入", size=adp.btn_text_size),
+                    on_click=lambda e: self.show_manual_entry(),
+                    bgcolor="#3fb950",
+                    color="#000000",
+                    height=adp.btn_height,
+                    style=ft.ButtonStyle(
+                        shape=ft.RoundedRectangleBorder(radius=adp.s(6)),
+                        padding=adp.pad_symmetric(14, 6),
+                    ),
+                ),
+            ],
             spacing=adp.s(6),
             alignment=ft.MainAxisAlignment.CENTER,
+            wrap=True,
         )
-    
     def _refresh_ui(self):
         """完整的 UI 刷新（缩放变化时）"""
         adp.update(self.page.width or 360, self.page.height or 640)
@@ -408,6 +421,29 @@ class MacauApp:
             wc = a.wave_stats(100)
             oc = a.odd_even_stats(100)
             hot, cold, _ = a.hot_cold_numbers(50)
+            total_oe = sum(oc.values()) or 1
+            # 一码中特
+            top_one = pred[0]
+            oz = num_to_zodiac(top_one)
+            ow, wc_color = num_to_wave(top_one)
+            ooe, _ = num_to_odd_even(top_one)
+            top_house = self.ensemble._house_strategy()
+            th = top_house.get(top_one, 0.5)
+            
+            yms_size = adp.s(48)
+            self.content_area.controls.append(self._card([
+                self._section_title("一码中特", "#f5c518"),
+                ft.Row([
+                    ft.Text(f"{top_one:02d}", size=yms_size, color=wc_color, weight=ft.FontWeight.BOLD),
+                    ft.Column([
+                        ft.Text(f"生肖: {oz}", size=adp.body_size, color="#e6edf3"),
+                        ft.Text(f"波色: {ow}", size=adp.body_size, color=oc),
+                        ft.Text(f"单双: {ooe}", size=adp.body_size, color="#e6edf3"),
+                        ft.Text(f"庄家意愿: {th:.0%}", size=adp.small_size, color="#8b949e"),
+                    ], spacing=adp.s(2)),
+                ], spacing=adp.s(16), alignment=ft.MainAxisAlignment.CENTER),
+            ], accent="#f5c518"))
+            
             total_oe = sum(oc.values()) or 1
             
             advice_lines = [
@@ -662,6 +698,102 @@ class MacauApp:
         
         self.page.update()
 
+
+
+    # ──────────────── 手动录入开奖数据 ────────────────
+    def show_manual_entry(self):
+        """手动录入开奖数据对话框"""
+        global _manual_dlg_data
+        _manual_dlg_data = {"expect": "", "date": "", "codes": ""}
+        
+        if self.data:
+            lt = self.data[-1]
+            _manual_dlg_data["expect"] = str(int(lt.get("expect", 0)) + 1)
+            _manual_dlg_data["date"] = (lt.get("openTime", "") or "")[:10]
+        
+        expect_field = ft.TextField(
+            label="期号", value=_manual_dlg_data["expect"],
+            border_color="#f5c518", text_size=adp.body_size,
+            bgcolor="#0d1117", color="#e6edf3",
+            on_change=lambda e: _manual_dlg_data.update({"expect": e.control.value}),
+        )
+        date_field = ft.TextField(
+            label="日期 (YYYY-MM-DD)", value=_manual_dlg_data["date"],
+            border_color="#f5c518", text_size=adp.body_size,
+            bgcolor="#0d1117", color="#e6edf3",
+            on_change=lambda e: _manual_dlg_data.update({"date": e.control.value}),
+        )
+        codes_field = ft.TextField(
+            label="号码 (逗号分隔，6平特+1正特)", value="",
+            border_color="#58a6ff", text_size=adp.body_size,
+            bgcolor="#0d1117", color="#e6edf3", hint_text="如: 05,12,23,34,41,48,07",
+            hint_style=ft.TextStyle(color="#484f58"),
+            on_change=lambda e: _manual_dlg_data.update({"codes": e.control.value}),
+        )
+        
+        status_text = ft.Text("", size=adp.small_size, color="#f85149")
+        
+        def do_save(e):
+            codes_str = _manual_dlg_data["codes"].strip()
+            if not codes_str:
+                status_text.value = "请输入号码"
+                status_text.update()
+                return
+            
+            parts = [p.strip() for p in codes_str.replace("，", ",").split(",") if p.strip()]
+            if len(parts) != 7:
+                status_text.value = f"需要7个号码，当前{len(parts)}个"
+                status_text.update()
+                return
+            try:
+                nums = [int(p) for p in parts]
+                if not all(1 <= n <= 49 for n in nums):
+                    status_text.value = "号码必须在1-49之间"
+                    status_text.update()
+                    return
+            except ValueError:
+                status_text.value = "号码格式错误"
+                status_text.update()
+                return
+            
+            codes_fmt = ",".join(f"{n:02d}" for n in nums)
+            new_record = {
+                "expect": _manual_dlg_data["expect"],
+                "openCode": codes_fmt,
+                "openTime": (_manual_dlg_data["date"] or "") + " 21:30:00"
+            }
+            existing = load_data()
+            existing = [d for d in existing if d.get("expect") != _manual_dlg_data["expect"]]
+            existing.append(new_record)
+            all_data = sorted(existing, key=lambda x: int(x.get("expect", 0)))
+            save_data(all_data)
+            
+            self.data = sorted(load_data(), key=lambda x: int(x.get("expect", 0)))
+            self.analyzer = LotteryAnalyzer(self.data)
+            self.ensemble = EnsemblePredictor(self.analyzer)
+            self.page.dialog.open = False
+            self.page.update()
+            self.show_predict()
+        
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("手动录入开奖数据", color="#f5c518", weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                expect_field,
+                date_field,
+                codes_field,
+                status_text,
+            ], spacing=adp.s(10), tight=True, height=adp.s(260), width=adp.s(300)),
+            actions=[
+                ft.TextButton("取消", on_click=lambda e: setattr(self.page.dialog, "open", False) or self.page.update()),
+                ft.ElevatedButton("确认录入", on_click=do_save,
+                    bgcolor="#3fb950", color="#000000"),
+            ],
+            bgcolor="#161b22",
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
 
 def main():
     ft.run(MacauApp, name="数字游戏预测V4PRO")
