@@ -1,0 +1,1696 @@
+#!/usr/bin/env python3
+
+import tkinter as tk
+from tkinter import ttk
+import sys, json, os, ssl, random, math
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime
+import threading
+import macaujc_api
+import tkinter.messagebox as messagebox
+
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# 数据文件路径: 开发模式用本地，EXE 模式用 AppData
+if getattr(sys, 'frozen', False):
+    _appdata = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'macau_lottery')
+    os.makedirs(_appdata, exist_ok=True)
+    DATA_FILE = os.path.join(_appdata, 'macaujc_data.json')
+else:
+    DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'macaujc_data.json')
+
+# UI color constants
+BG  = "#1a1a2e"
+CARD= "#16213e"
+BDR = "#0f3460"
+TXT = "#e0e0e0"
+SUB = "#8899aa"
+ACC = "#e94560"
+GLD = "#f5c518"
+GRN = "#4ecca3"
+RED = "#e94560"
+ORG = "#f77f00"
+PUR = "#7b2ff7"
+
+ZODIAC_MAP = ['鼠','牛','虎','兔','龍','蛇','馬','羊','猴','雞','狗','豬']
+
+def num_to_zodiac(num):
+    n = int(num)
+    if n < 1 or n > 49: return '?'
+    m = {1:'馬',2:'蛇',3:'龍',4:'兔',5:'虎',6:'牛',7:'鼠',8:'豬',9:'狗',10:'雞',11:'猴',12:'羊',13:'馬',14:'蛇',15:'龍',16:'兔',17:'虎',18:'牛',19:'鼠',20:'豬',21:'狗',22:'雞',23:'猴',24:'羊',25:'馬',26:'蛇',27:'龍',28:'兔',29:'虎',30:'牛',31:'鼠',32:'豬',33:'狗',34:'雞',35:'猴',36:'羊',37:'馬',38:'蛇',39:'龍',40:'兔',41:'虎',42:'牛',43:'鼠',44:'豬',45:'狗',46:'雞',47:'猴',48:'羊',49:'馬'}
+    return m.get(n, '?')
+
+def num_to_wuxing(n):
+    """五行映射: 金木水火土"""
+    m = {1:'水',2:'水',3:'木',4:'木',5:'木',6:'火',7:'火',8:'火',9:'金',10:'金',11:'金',
+         12:'水',13:'水',14:'木',15:'木',16:'木',17:'火',18:'火',19:'火',20:'金',21:'金',22:'金',
+         23:'水',24:'水',25:'木',26:'木',27:'木',28:'火',29:'火',30:'火',31:'金',32:'金',33:'金',
+         34:'水',35:'水',36:'木',37:'木',38:'木',39:'火',40:'火',41:'火',42:'金',43:'金',44:'金',
+         45:'水',46:'水',47:'木',48:'木',49:'木'}
+    return m.get(n,'?')
+# 红蓝绿波映射
+def num_to_wave(n):
+    red   = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
+    blue  = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
+    green = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
+    n = int(n)
+    if n in red:   return ("红波", "#ff4444")
+    if n in blue:  return ("蓝波", "#4488ff")
+    if n in green: return ("绿波", "#44cc44")
+    return ("?", "#888")
+
+# 单双映射
+def num_to_odd_even(n):
+    n = int(n)
+    return ("单", "#ff8c00") if n % 2 == 1 else ("双", "#8888ff")
+
+
+def fetch_data(year=None):
+    """使用 macaujc_api 获取历史数据"""
+    years = [year] if year else [2023, 2024, 2025, 2026]
+    return macaujc_api.fetch_all(years)
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+    return fetch_data()
+
+def save_data(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+
+class LotteryAnalyzer:
+    def __init__(self, data):
+        self.data = sorted(data, key=lambda x: int(x.get('expect', 0)))
+    def get_numbers(self, r):
+        c = r.get('openCode','')
+        return [int(x) for x in c.split(',') if x.strip()] if c else []
+    def get_zodiacs(self, r):
+        return [num_to_zodiac(n) for n in self.get_numbers(r)]
+    def frequency_stats(self, last_n=100):
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        nc, zc = Counter(), Counter()
+        for r in recent:
+            for n in self.get_numbers(r): nc[n] += 1
+            for z in self.get_zodiacs(r): zc[z] += 1
+        return nc, zc
+    def hot_cold_numbers(self, last_n=50):
+        nc, _ = self.frequency_stats(last_n)
+        sn = sorted(range(1,50), key=lambda x: nc.get(x,0), reverse=True)
+        return sn[:12], sn[-12:], dict(nc)
+    def hot_cold_zodiac(self, last_n=50):
+        _, zc = self.frequency_stats(last_n)
+        sz = sorted(ZODIAC_MAP, key=lambda x: zc.get(x,0), reverse=True)
+        return sz[:6], sz[-6:], dict(zc)
+    def special_code_history(self, last_n=50):
+        specials = []
+        for r in self.data[-last_n:]:
+            nums = self.get_numbers(r)
+            if len(nums) >= 7:
+                specials.append({'expect': r.get('expect'), 'time': r.get('openTime'), 'number': nums[6], 'zodiac': num_to_zodiac(nums[6])})
+        return specials
+
+    def wave_stats(self, last_n=100):
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        wc = Counter()
+        for r in recent:
+            for n in self.get_numbers(r):
+                wave_name, _ = num_to_wave(n)
+                wc[wave_name] += 1
+        return wc
+    def odd_even_stats(self, last_n=100):
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        oc = Counter()
+        for r in recent:
+            for n in self.get_numbers(r):
+                oe, _ = num_to_odd_even(n)
+                oc[oe] += 1
+        return oc
+    def wave_sequence(self, last_n=50):
+        seq = []
+        for r in self.data[-last_n:]:
+            nums = self.get_numbers(r)
+            waves = [num_to_wave(n)[0] for n in nums]
+            seq.append({"expect": r.get("expect"), "nums": nums, "waves": waves})
+        return seq
+    def odd_even_sequence(self, last_n=50):
+        seq = []
+        for r in self.data[-last_n:]:
+            nums = self.get_numbers(r)
+            oes = [num_to_odd_even(n)[0] for n in nums]
+            seq.append({"expect": r.get("expect"), "nums": nums, "oes": oes})
+        return seq
+    def _zodiac_coverage_score(self, last_n=60):
+        """生肖综合得分：频率 + 间隔 + 号码权重 + 近期动量"""
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        zfreq = Counter()
+        zrecent_weight = Counter()  # 近期加权频率
+        for i, r in enumerate(reversed(recent)):
+            for z in set(self.get_zodiacs(r)):
+                zfreq[z] += 1
+                w = 1.0 + (last_n - i) / last_n  # 近期权重更高
+                zrecent_weight[z] += w
+        zgap = {z: last_n for z in ZODIAC_MAP}
+        for i, r in enumerate(reversed(recent)):
+            for z in set(self.get_zodiacs(r)):
+                if zgap.get(z) == last_n:
+                    zgap[z] = i
+        num_weight = {z: 5 if z == "鼠" else 4 for z in ZODIAC_MAP}
+        total = len(recent)
+        scores = {}
+        for z in ZODIAC_MAP:
+            freq_score = zfreq.get(z, 0) / max(total, 1)
+            recent_score = zrecent_weight.get(z, 0) / max(sum(zrecent_weight.values()), 1) * 12
+            gap_score = min(zgap.get(z, last_n) / 20.0, 1.2)
+            nw = num_weight.get(z, 4) / 5.0
+            # 重平衡：频率40% + 近期动量25% + 间隔25% + 号码权重10%
+            scores[z] = freq_score * 0.40 + recent_score * 0.25 + gap_score * 0.25 + nw * 0.10
+        return scores
+
+    def _zodiac_pair_affinity(self, zodiacs, last_n=300):
+        """计算生肖组合的共现亲和度"""
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        pair_count = Counter()
+        for r in recent:
+            z_set = set(self.get_zodiacs(r))
+            z_list = sorted(z_set)
+            for i in range(len(z_list)):
+                for j in range(i + 1, len(z_list)):
+                    pair_count[(z_list[i], z_list[j])] += 1
+        return pair_count
+
+    def predict_triple_zodiac(self, last_n=60):
+        """三连肖: 滚动窗口频率 Top-3 — 简单却最有效"""
+        zfreq = Counter()
+        recent_n = min(last_n * 3, len(self.data))
+        for r in self.data[-recent_n:]:
+            for z in set(self.get_zodiacs(r)):
+                zfreq[z] += 1
+        return [z for z, _ in zfreq.most_common(3)]
+
+    def predict_quad_zodiac(self, last_n=60):
+        """四连肖: 三连肖 + 最优第四肖"""
+        triple = self.predict_triple_zodiac(last_n)
+        recent_n = min(last_n * 4, len(self.data))
+        zfreq = Counter()
+        for r in self.data[-recent_n:]:
+            for z in set(self.get_zodiacs(r)):
+                zfreq[z] += 1
+        remaining = [(z, zfreq.get(z, 0)) for z in ZODIAC_MAP if z not in triple]
+        remaining.sort(key=lambda x: x[1], reverse=True)
+        return triple + [remaining[0][0]]
+    def special_frequency(self, last_n=100):
+        """只统计特码(第7位)的频率，不包含前6位平特"""
+        recent = self.data[-last_n:] if len(self.data) > last_n else self.data
+        sc = Counter()
+        for r in recent:
+            nums = self.get_numbers(r)
+            if len(nums) >= 7:
+                sc[nums[6]] += 1
+        return sc
+
+    def predict_special_codes(self, count=7):
+        nc = self.special_frequency(100)
+        sp = self.special_code_history(30)
+        rsp = set(s['number'] for s in sp[-20:])
+        appeared = set()
+        for r in self.data[-60:]: appeared.update(self.get_numbers(r))
+        missing = set(range(1,50)) - appeared
+        scores = {}
+        for n in range(1,50):
+            s = nc.get(n,0) * 3
+            if n in missing: s += 10
+            if n in rsp: s -= 2
+            scores[n] = s
+        return sorted(range(1,50), key=lambda x: scores[x], reverse=True)[:count]
+
+class MarkovChainModel:
+    def __init__(self, a): self.a = a
+    def _build(self, n=100):
+        recent = self.a.data[-n:]
+        trans = defaultdict(Counter)
+        for i in range(len(recent)-1):
+            for a in set(self.a.get_zodiacs(recent[i])):
+                for b in set(self.a.get_zodiacs(recent[i+1])): trans[a][b] += 1
+        return {src: {k: v/sum(d.values()) for k,v in d.most_common()} for src, d in trans.items()}
+    def predict_zodiacs(self, count=4):
+        probs = self._build()
+        scores = Counter()
+        for z in set(self.a.get_zodiacs(self.a.data[-1])):
+            if z in probs:
+                for dst, p in probs[z].items(): scores[dst] += p
+        return [z for z, _ in scores.most_common(count)]
+    def predict_specials(self, count=7):
+        recent = self.a.data[-80:]
+        trans = defaultdict(Counter)
+        for i in range(len(recent)-1):
+            n1, n2 = self.a.get_numbers(recent[i]), self.a.get_numbers(recent[i+1])
+            if len(n1)>=7 and len(n2)>=7: trans[n1[6]][n2[6]] += 1
+        ln = self.a.get_numbers(self.a.data[-1])
+        if len(ln)>=7 and ln[6] in trans: return [x for x,_ in trans[ln[6]].most_common(count)]
+        return self.a.predict_special_codes(count)
+
+
+class MonteCarloModel:
+    def __init__(self, a):
+        self.a = a
+        random.seed(42)
+    def _dist(self, n=60):
+        recent = self.a.data[-n:]
+        nc, zc, sc = Counter(), Counter(), Counter()
+        for r in recent:
+            nums = self.a.get_numbers(r)
+            for x in nums[:6]: nc[x] += 1
+            for z in self.a.get_zodiacs(r): zc[z] += 1  # 全部7个号码的生肖
+            if len(nums)>=7: sc[nums[6]] += 1
+        return nc, zc, sc
+    def predict_zodiacs(self, count=4, sims=1000):
+        _, zd, _ = self._dist()
+        items = list(zd.keys())
+        if not items:
+            return self.a.predict_triple_zodiac()[:count]
+        w = [zd[z] for z in items]
+        total = sum(w)
+        probs = [x/total for x in w]
+        results = Counter()
+        for _ in range(sims):
+            sampled = set()
+            while len(sampled) < min(count, len(items)):
+                sampled.add(random.choices(items, weights=probs)[0])
+            for z in sampled: results[z] += 1
+        return [z for z, _ in results.most_common(count)]
+    def predict_specials(self, count=7, sims=2000):
+        _, _, sc = self._dist()
+        items = list(sc.keys())
+        if not items:
+            return self.a.predict_special_codes(count)
+        w = [sc[x] for x in items]
+        total = sum(w)
+        if total <= 0:
+            return self.a.predict_special_codes(count)
+        probs = [x/total for x in w]
+        results = Counter()
+        for _ in range(sims):
+            sampled = set()
+            while len(sampled) < min(count, len(items)):
+                sampled.add(random.choices(items, weights=probs)[0])
+            for n in sampled: results[n] += 1
+        return [n for n, _ in results.most_common(count)]
+
+
+class WeightedEMAModel:
+    def __init__(self, a, decay=0.92):
+        self.a = a
+        self.decay = decay
+    def _weighted(self, n=60):
+        recent = self.a.data[-n:]
+        nw, zw, sw = Counter(), Counter(), Counter()
+        for i, r in enumerate(reversed(recent)):
+            w = self.decay ** i
+            nums = self.a.get_numbers(r)
+            for x in nums[:6]: nw[x] += w
+            for z in self.a.get_zodiacs(r): zw[z] += w  # 全部7个号码的生肖
+            if len(nums)>=7: sw[nums[6]] += w
+        return nw, zw, sw
+    def predict_zodiacs(self, count=4):
+        _, zw, _ = self._weighted()
+        return [z for z,_ in zw.most_common(count)]
+    def predict_specials(self, count=7):
+        _, _, sw = self._weighted()
+        return [x for x,_ in sw.most_common(count)]
+
+class EnsemblePredictor:
+    """博弈论增强集成预测器 — Mixed Strategy Nash + Minimax + Bayesian Phase"""
+    def __init__(self, a):
+        self.a = a
+        self.markov = MarkovChainModel(a)
+        self.monte = MonteCarloModel(a)
+        self.ema = WeightedEMAModel(a)
+        # 动态权重追踪
+        self._regret = {"markov": 0.0, "monte": 0.0, "ema": 0.0, "triple": 0.0}
+        self._weights = {"markov": 0.35, "monte": 0.25, "ema": 0.25, "triple": 0.15}
+        # 历史预测记录（用于后悔值计算）
+        self._last_pred_zodiacs = None
+        self._last_pred_specials = None
+        # Bayesian 阶段先验
+        self._phase_prior = {"raise": 0.25, "trap": 0.25, "kill": 0.25, "break": 0.25}
+
+    # ========== 1. Bayesian 阶段检测 ==========
+    def _detect_phase(self):
+        """基于近期特征推断庄家所处博弈阶段"""
+        sp = self.a.special_code_history(50)
+        if len(sp) < 20:
+            return "raise"
+        nums = [s["number"] for s in sp[-15:]]
+        zodiacs = [s["zodiac"] for s in sp[-15:]]
+
+        # 特征计算
+        unique_z = len(set(zodiacs[-10:]))  # 最近10期不同生肖数
+        repeats = sum(1 for i in range(1, len(nums)) if nums[i] == nums[i-1])  # 连续重复
+        gap_mean = sum(abs(nums[i] - nums[i-1]) for i in range(1, len(nums))) / max(len(nums)-1, 1)
+
+        # 模式规律性
+        wave_seq = [num_to_wave(n)[0] for n in nums]
+        wave_changes = sum(1 for i in range(1, len(wave_seq)) if wave_seq[i] != wave_seq[i-1])
+
+        # 评分
+        scores = {"raise": 0, "trap": 0, "kill": 0, "break": 0}
+        # raise: 高多样性, 少重复, 看起来"正常"
+        if unique_z >= 8: scores["raise"] += 2
+        if repeats <= 1: scores["raise"] += 1
+        # trap: 中等多样性, 出现规律
+        if 5 <= unique_z <= 7: scores["trap"] += 2
+        if wave_changes <= 6: scores["trap"] += 1
+        # kill: 低多样性, 强烈规律被打破
+        if unique_z <= 4: scores["kill"] += 2
+        if gap_mean < 10: scores["kill"] += 1
+        # break: 高变化率, 频繁切换
+        if wave_changes >= 10: scores["break"] += 2
+
+        best = max(scores, key=scores.get)
+        # 更新先验
+        for k in self._phase_prior:
+            self._phase_prior[k] = self._phase_prior[k] * 0.8 + (0.2 if k == best else 0)
+        return best
+
+    # ========== 2. Shannon 熵 — 量化模式强度 ==========
+    def _pattern_entropy(self, last_n=20):
+        """计算号码序列的熵，熵越低 = 模式越强 = 越可能被庄家打破"""
+        
+        sp = self.a.special_code_history(last_n)
+        if len(sp) < 10:
+            return 1.0
+        nums = [s["number"] for s in sp]
+        freq = {}
+        for n in nums:
+            freq[n] = freq.get(n, 0) + 1
+        total = len(nums)
+        entropy = 0
+        for count in freq.values():
+            p = count / total
+            if p > 0:
+                entropy -= p * math.log2(p)
+        max_entropy = math.log2(min(49, total))
+        return entropy / max(max_entropy, 0.01)
+
+    # ========== 3. Minimax 后悔最小化 ==========
+    def _minimax_score(self, candidates, context="zodiac"):
+        """为候选项计算 minimax 分数：假设庄家知道我们的选择，最小化最坏情况"""
+        sp = self.a.special_code_history(60)
+        if len(sp) < 30:
+            return {c: 1.0 for c in candidates}
+
+        phase = self._detect_phase()
+        entropy = self._pattern_entropy()
+
+        # 近期频率
+        recent_20 = [s["number"] for s in sp[-20:]]
+        freq = {}
+        for n in recent_20:
+            freq[n] = freq.get(n, 0) + 1
+
+        scores = {}
+        for c in candidates:
+            # 基础分: 频率越高大众关注越多，庄家越想避
+            f = freq.get(c if isinstance(c, int) else None, 0)
+            base = 1.0 / max(f, 1)
+
+            # 阶段调整
+            if phase == "raise":
+                base *= 1.1  # 庄家放松，可以跟统计
+            elif phase == "trap":
+                base *= 0.9  # 庄家设套，反着来
+            elif phase == "kill":
+                base *= 0.7  # 高风险，大幅降权
+            # break: base不变
+
+            # 熵调整：低熵时模式强，庄家更可能打破
+            if entropy < 0.5:
+                base *= 0.85
+
+            scores[c] = max(base, 0.1)
+
+        return scores
+
+    # ========== 4. 动态后悔权重 ==========
+    def _update_weights(self, actual_zodiacs, actual_special):
+        """根据上一期实际结果更新各模型权重"""
+        if not self._last_pred_zodiacs or not self._last_pred_specials:
+            return
+
+        learning_rate = 0.15
+        models = {
+            "markov": (self.markov.predict_zodiacs(4), self.markov.predict_specials(7)),
+            "monte": (self.monte.predict_zodiacs(4), self.monte.predict_specials(7)),
+            "ema": (self.ema.predict_zodiacs(4), self.ema.predict_specials(7)),
+            "triple": (self.a.predict_triple_zodiac(), self.a.predict_special_codes(7)),
+        }
+
+        for name, (pred_z, pred_s) in models.items():
+            # 生肖命中率
+            z_hit = sum(1 for z in pred_z if z in actual_zodiacs) / max(len(pred_z), 1)
+            s_hit = sum(1 for s in pred_s if s == actual_special)  # 0 or 1
+            reward = z_hit * 0.6 + s_hit * 0.4
+            self._regret[name] = self._regret[name] * 0.9 + (1 - reward) * 0.1
+
+        # Hedge 算法更新权重
+        total = sum(max(v, 0.01) for v in self._regret.values())
+        for name in self._weights:
+            raw = max(self._regret[name], 0.01) / total
+            self._weights[name] = self._weights[name] * (1 - learning_rate) + raw * learning_rate
+
+        # 归一化
+        w_total = sum(self._weights.values())
+        for name in self._weights:
+            self._weights[name] /= w_total
+
+    # ========== 5. 博弈增强预测接口 ==========
+    def predict_zodiacs(self, count=4):
+        """集成三个模型 + 博弈论动态权重"""
+        scores = Counter()
+        phase = self._detect_phase()
+        entropy = self._pattern_entropy()
+
+        # Markov + 博弈调制
+        m_pred = self.markov.predict_zodiacs(count)
+        m_w = self._weights["markov"]
+        if phase == "break": m_w *= 0.6
+        for i, z in enumerate(m_pred):
+            scores[z] += m_w * (count - i)
+
+        # Monte Carlo
+        mc_pred = self.monte.predict_zodiacs(count)
+        mc_w = self._weights["monte"]
+        for i, z in enumerate(mc_pred):
+            scores[z] += mc_w * (count - i)
+
+        # EMA
+        ema_pred = self.ema.predict_zodiacs(count)
+        ema_w = self._weights["ema"]
+        if phase == "trap": ema_w *= 1.2
+        for i, z in enumerate(ema_pred):
+            scores[z] += ema_w * (count - i)
+
+        # 三连肖策略
+        tr_pred = self.a.predict_triple_zodiac()
+        tr_w = self._weights["triple"]
+        for i, z in enumerate(tr_pred):
+            scores[z] += tr_w * (3 - i)
+
+        # Minimax 微调
+        mm = self._minimax_score([z for z, _ in scores.most_common(count * 2)])
+        for z in scores:
+            if z in mm:
+                scores[z] *= mm[z]
+
+        self._last_pred_zodiacs = [z for z, _ in scores.most_common(count)]
+        return self._last_pred_zodiacs
+
+    def predict_specials(self, count=7):
+        """特码预测 — Minimax + 动态权重"""
+        sp = self.a.special_code_history(30)
+        phase = self._detect_phase()
+        entropy = self._pattern_entropy()
+
+        # 各模型预测
+        m_pred = self.markov.predict_specials(count)
+        mc_pred = self.monte.predict_specials(count)
+        ema_pred = self.ema.predict_specials(count)
+        freq_pred = self.a.predict_special_codes(count)
+
+        # 汇总
+        scores = Counter()
+        w = self._weights
+        for i, n in enumerate(m_pred): scores[n] += w["markov"] * (count - i)
+        for i, n in enumerate(mc_pred): scores[n] += w["monte"] * (count - i)
+        for i, n in enumerate(ema_pred): scores[n] += w["ema"] * (count - i)
+        for i, n in enumerate(freq_pred): scores[n] += w["triple"] * (count - i)
+
+        # Minimax 调整
+        mm = self._minimax_score(list(scores.keys()))
+        for n in scores:
+            if n in mm:
+                scores[n] *= mm[n]
+
+        # 阶段特定调整
+        if phase == "kill":
+            # 避免热门号码
+            freq_10 = Counter(s["number"] for s in sp[-10:])
+            for n in scores:
+                if freq_10.get(n, 0) >= 2:
+                    scores[n] *= 0.5
+
+        result = [n for n, _ in scores.most_common(count)]
+        self._last_pred_specials = result
+        return result
+
+    def predict_waves(self, count=2):
+        """波色预测"""
+        sp = self.a.special_code_history(30)
+        waves = [num_to_wave(s["number"])[0] for s in sp]
+        phase = self._detect_phase()
+        c = Counter(waves)
+        # 博弈: 连续同波色时庄家可能打破
+        streak = 0
+        last = waves[-1]
+        for w in reversed(waves):
+            if w == last: streak += 1
+            else: break
+        if streak >= 3 and phase != "raise":
+            # 降低连续波色的权重
+            c[last] = max(0, c[last] - streak)
+        return [w for w, _ in c.most_common(count)]
+
+    def predict_odd_even(self, count=2):
+        """单双预测"""
+        sp = self.a.special_code_history(30)
+        oe = ["单" if s["number"] % 2 == 1 else "双" for s in sp]
+        phase = self._detect_phase()
+        c = Counter(oe)
+        streak = 0
+        last = oe[-1]
+        for o in reversed(oe):
+            if o == last: streak += 1
+            else: break
+        if streak >= 3 and phase != "raise":
+            c[last] = max(0, c[last] - streak)
+        return [o for o, _ in c.most_common(count)]
+
+    def all_model_results(self):
+        """返回所有子模型的预测结果"""
+        results = {}
+        for name, model in [("Markov", self.markov), ("MonteCarlo", self.monte), ("EMA", self.ema)]:
+            results[name] = (model.predict_zodiacs(4), model.predict_specials(7))
+        results["Ensemble"] = (self.predict_zodiacs(4), self.predict_specials(7))
+        results["Phase"] = self._detect_phase()
+        results["Entropy"] = round(self._pattern_entropy(), 3)
+        results["Weights"] = {k: round(v, 3) for k, v in self._weights.items()}
+        return results
+
+    # ========== 庄家策略层（保持原有博弈逻辑） ==========
+    def _zodiac_gaps(self, last_n=180):
+        recent = self.a.data[-last_n:]
+        gap = {z: last_n for z in ZODIAC_MAP}
+        for i, r in enumerate(reversed(recent)):
+            nums = self.a.get_numbers(r)
+            if len(nums) >= 7:
+                z = num_to_zodiac(nums[6])
+                if gap[z] == last_n:
+                    gap[z] = i
+        return gap
+
+    def _flat_zodiac_freq(self, last_n=30):
+        recent = self.a.data[-last_n:]
+        fz = Counter()
+        for r in recent:
+            nums = self.a.get_numbers(r)
+            for n in nums[:6]:
+                fz[num_to_zodiac(n)] += 1
+        return fz
+
+    def _flat_reference(self, lag=3):
+        if len(self.a.data) < lag + 1:
+            return set()
+        ref = self.a.data[-lag - 1]
+        nums = self.a.get_numbers(ref)
+        if len(nums) < 6:
+            return set()
+        return {num_to_zodiac(n) for n in nums[:6]}
+
+    def _house_strategy(self):
+        """庄家心理博弈 — 原有策略保留"""
+        sp = self.a.special_code_history(80)
+        if len(sp) < 30:
+            return {}
+
+        plan = {}
+        hot_10 = Counter(s["number"] for s in sp[-10:])
+        hot_20 = Counter(s["number"] for s in sp[-20:])
+        gaps = self._zodiac_gaps(180)
+
+        # 连续检测
+        
+        wave_seq = [num_to_wave(s["number"])[0] for s in sp[-15:]]
+        wave_streak, last_wave = 0, wave_seq[-1]
+        for w in reversed(wave_seq):
+            if w == last_wave: wave_streak += 1
+            else: break
+
+        oe_seq = [num_to_odd_even(s["number"])[0] for s in sp[-15:]]
+        oe_streak, last_oe = 0, oe_seq[-1]
+        for o in reversed(oe_seq):
+            if o == last_oe: oe_streak += 1
+            else: break
+
+        last_zodiacs = [s["zodiac"] for s in sp[-5:]]
+        z_streak = 0
+        last_z = last_zodiacs[-1] if last_zodiacs else ""
+        for z in reversed(last_zodiacs):
+            if z == last_z: z_streak += 1
+            else: break
+
+        size_seq = ["大" if s["number"] > 25 else "小" for s in sp[-15:]]
+        size_streak, last_size = 0, size_seq[-1]
+        for s in reversed(size_seq):
+            if s == last_size: size_streak += 1
+            else: break
+
+        wx_seq = [num_to_wuxing(s["number"]) for s in sp[-15:]]
+        wx_streak, last_wx = 0, wx_seq[-1]
+        for w in reversed(wx_seq):
+            if w == last_wx: wx_streak += 1
+            else: break
+
+        head_seq = [s["number"] // 10 for s in sp[-15:]]
+        head_streak, last_head = 0, head_seq[-1]
+        for h in reversed(head_seq):
+            if h == last_head: head_streak += 1
+            else: break
+
+        tail_seq = [s["number"] % 10 for s in sp[-15:]]
+        tail_streak, last_tail = 0, tail_seq[-1]
+        for t in reversed(tail_seq):
+            if t == last_tail: tail_streak += 1
+            else: break
+
+        def bs_oe(n):
+            return ("大" if n > 24 else "小") + ("单" if n % 2 == 1 else "双")
+        bsoe_seq = [bs_oe(s["number"]) for s in sp[-15:]]
+        bsoe_streak, last_bsoe = 0, bsoe_seq[-1]
+        for b in reversed(bsoe_seq):
+            if b == last_bsoe: bsoe_streak += 1
+            else: break
+
+        def dom_wild(z):
+            return "家" if z in "牛馬羊雞狗豬" else "野"
+        dw_seq = [dom_wild(s["zodiac"]) for s in sp[-15:]]
+        dw_streak, last_dw = 0, dw_seq[-1]
+        for d in reversed(dw_seq):
+            if d == last_dw: dw_streak += 1
+            else: break
+
+        # 吉祥生肖压力
+        popular_zodiacs = {}
+        for z in ZODIAC_MAP:
+            freq = sum(1 for s in sp[-30:] if s["zodiac"] == z)
+            if freq >= 4:
+                popular_zodiacs[z] = max(0.4, 1 - (freq - 3) * 0.15)
+
+        # 计算每个号码的庄家意愿
+        for n in range(1, 50):
+            z = num_to_zodiac(n)
+            will = 1.0
+            # 吃大赔小
+            if hot_10.get(n, 0) >= 2: will *= 0.3
+            elif hot_20.get(n, 0) >= 3: will *= 0.5
+            # 冷号
+            if gaps.get(z, 0) > 60: will *= 1.3
+            # 破模式
+            if wave_streak >= 4 and num_to_wave(n)[0] == last_wave: will *= 0.55
+            elif wave_streak >= 3 and num_to_wave(n)[0] == last_wave: will *= 0.72
+            if oe_streak >= 4 and num_to_odd_even(n)[0] == last_oe: will *= 0.60
+            elif oe_streak >= 3 and num_to_odd_even(n)[0] == last_oe: will *= 0.78
+            if z_streak >= 2 and z == last_z: will *= 0.40
+            if size_streak >= 4 and (("大" if n > 25 else "小") == last_size): will *= 0.65
+            if head_streak >= 3 and n // 10 == last_head: will *= 0.68
+            if tail_streak >= 3 and n % 10 == last_tail: will *= 0.62
+            if bsoe_streak >= 3 and bs_oe(n) == last_bsoe: will *= 0.65
+            if dw_streak >= 4 and dom_wild(z) == last_dw: will *= 0.72
+            if wx_streak >= 3 and num_to_wuxing(n) == last_wx: will *= 0.65
+            if z in popular_zodiacs: will *= popular_zodiacs[z]
+            plan[n] = max(will, 0.30)
+
+        return plan
+
+    def _cross_pressure(self):
+        """多维度交叉博弈 — 原有策略保留"""
+        sp = self.a.special_code_history(60)
+        if len(sp) < 20:
+            return {}
+
+        def tag(n):
+            z = num_to_zodiac(n)
+            return {
+                "波": num_to_wave(n)[0], "单双": "单" if n % 2 == 1 else "双",
+                "大小": "大" if n > 24 else "小", "头": str(n // 10) + "头",
+                "尾": str(n % 10) + "尾",
+                "大小单双": ("大" if n > 24 else "小") + ("单" if n % 2 == 1 else "双"),
+                "家野": "家" if z in "牛馬羊雞狗豬" else "野", "肖": z,
+                "五行": num_to_wuxing(n)
+            }
+
+        dim_hot = {}
+        for s in sp[-20:]:
+            t = tag(s["number"])
+            for dim, val in t.items():
+                if dim not in dim_hot:
+                    dim_hot[dim] = {}
+                dim_hot[dim][val] = dim_hot[dim].get(val, 0) + 1
+
+        dim_streak = {}
+        for dim_name in ["波", "单双", "大小", "头", "尾", "大小单双", "家野", "五行"]:
+            seq = [tag(s["number"])[dim_name] for s in sp[-12:]]
+            streak, last = 0, seq[-1]
+            for v in reversed(seq):
+                if v == last: streak += 1
+                else: break
+            dim_streak[dim_name] = (streak, last)
+
+        pressure = {}
+        for n in range(1, 50):
+            t = tag(n)
+            score = 0.0
+            for dim, val in t.items():
+                dim_data = dim_hot.get(dim, {})
+                hot = dim_data.get(val, 0)
+                dim_count = len(dim_data)
+                if dim_count > 0:
+                    avg = sum(dim_data.values()) / dim_count
+                    if hot > avg * 1.3: score -= 0.15
+                    elif hot < avg * 0.6: score += 0.12
+                if dim in dim_streak:
+                    streak_val, last_val = dim_streak[dim]
+                    if streak_val >= 3 and val == last_val: score -= 0.20
+                if hot == 0: score += 0.08
+            pressure[n] = max(score, -1.0)
+
+        if pressure:
+            min_p = min(pressure.values())
+            max_p = max(pressure.values())
+            if max_p > min_p:
+                for n in pressure:
+                    pressure[n] = 0.3 + (pressure[n] - min_p) / (max_p - min_p)
+
+        return pressure
+
+
+class DecisionAuditor:
+    """决策审计系统 — 回测预测 vs 实际结果，验证博弈模型有效性"""
+    def __init__(self, data):
+        self.data = sorted(data, key=lambda x: int(x.get("expect", 0)))
+        self.results = []  # [(期号, 预测生肖, 实际生肖, 预测特码, 实际特码, 命中数)]
+
+    def backtest(self, start_idx=100, window=30):
+        """滑动窗口回测：用前N期数据训练，预测下一期，记录结果"""
+        self.results = []
+        for i in range(start_idx, len(self.data) - 1, window):
+            train_data = self.data[:i]
+            test_record = self.data[i]
+
+            if len(train_data) < 50:
+                continue
+
+            analyzer = LotteryAnalyzer(train_data)
+            ensemble = EnsemblePredictor(analyzer)
+
+            # 预测
+            pred_zodiacs = ensemble.predict_zodiacs(4)
+            pred_specials = ensemble.predict_specials(7)
+
+            # 实际
+            actual_nums = analyzer.get_numbers(test_record)
+            actual_zodiacs = [num_to_zodiac(n) for n in actual_nums[:7]] if actual_nums else []
+            actual_special = actual_nums[6] if len(actual_nums) >= 7 else 0
+
+            # 命中计算
+            z_hits = len(set(pred_zodiacs) & set(actual_zodiacs))
+            s_hit = 1 if actual_special in pred_specials else 0
+
+            self.results.append({
+                "expect": test_record.get("expect"),
+                "pred_zodiacs": pred_zodiacs,
+                "actual_zodiacs": list(set(actual_zodiacs)),
+                "pred_specials": pred_specials,
+                "actual_special": actual_special,
+                "zodiac_hits": z_hits,
+                "special_hit": s_hit,
+            })
+
+        return self.results
+
+    def summary(self):
+        """生成审计摘要"""
+        if not self.results:
+            return {"error": "no results"}
+        total = len(self.results)
+        z_hits = sum(r["zodiac_hits"] for r in self.results)
+        s_hits = sum(r["special_hit"] for r in self.results)
+        max_z = total * 4  # 每期预测4个生肖
+
+        # 滑动命中率（最近N期加权）
+        recent_hits = []
+        for i, r in enumerate(self.results):
+            weight = min(1.0, (i + 1) / max(total, 1))  # 近期权重更高
+            recent_hits.append(r["zodiac_hits"] / 4.0 * weight)
+
+        return {
+            "total_tests": total,
+            "zodiac_hit_rate": round(z_hits / max(max_z, 1) * 100, 1),
+            "special_hit_rate": round(s_hits / max(total, 1) * 100, 1),
+            "weighted_zodiac_rate": round(sum(recent_hits) / max(len(recent_hits), 1) * 100, 1),
+            "last_10_hits": sum(r["zodiac_hits"] for r in self.results[-10:]),
+            "last_10_special": sum(r["special_hit"] for r in self.results[-10:]),
+            "results": self.results[-5:],  # 最近5期详情
+        }
+
+    def audit_report(self):
+        """生成完整审计报告文本"""
+        s = self.summary()
+        if "error" in s:
+            return s["error"]
+        lines = [
+            f"=== 决策审计报告 ===",
+            f"回测样本: {s['total_tests']} 期",
+            f"生肖命中率: {s['zodiac_hit_rate']}%",
+            f"特码命中率: {s['special_hit_rate']}%",
+            f"近期加权命中率: {s['weighted_zodiac_rate']}%",
+            f"近10期生肖命中: {s['last_10_hits']}/40",
+            f"近10期特码命中: {s['last_10_special']}/10",
+            f"",
+            f"--- 最近5期详情 ---",
+        ]
+        for r in s["results"]:
+            lines.append(
+                f"#{r['expect']}: 预测={','.join(r['pred_zodiacs'][:3])} "
+                f"实际={','.join(r['actual_zodiacs'][:4])} "
+                f"命中={r['zodiac_hits']}/4 特码={'中' if r['special_hit'] else '失'}"
+            )
+        return "\n".join(lines)
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        root.title("数字游戏预测")
+        root.geometry("1280x960")
+        root.minsize(1024, 800)
+        root.configure(bg=BG)
+        s = ttk.Style()
+        s.theme_use("clam")
+        s.configure("TNotebook", background=BG, borderwidth=0)
+        s.configure("TNotebook.Tab", padding=[18,6], font=("Segoe UI",10), background=CARD, foreground=TXT)
+        s.map("TNotebook.Tab", background=[("selected",BG)], foreground=[("selected",ACC)])
+        s.configure("TFrame", background=BG)
+        self.analyzer = None
+        self.data = None
+        self.ensemble = None
+        self.status_var = tk.StringVar(value="加载中...")
+        tk.Label(root, textvariable=self.status_var, bg=CARD, fg=SUB, font=("Segoe UI",9), anchor="w", padx=12, pady=4).pack(side=tk.BOTTOM, fill=tk.X)
+        hdr = tk.Frame(root, bg=BG)
+        hdr.pack(fill=tk.X, padx=20, pady=(12,0))
+        tk.Label(hdr, text="数字游戏预测", font=("Segoe UI",20,"bold"), fg=GLD, bg=BG).pack(side=tk.LEFT)
+        self.zbtn = tk.Button(hdr, text=" 生肖配置", command=self._zodiac_year_config_dialog, bg=PUR, fg="#fff", font=("Segoe UI",10), relief="flat", padx=16, pady=4, cursor="hand2")
+        self.zbtn.pack(side=tk.RIGHT, padx=(0,8))
+        self.mbtn = tk.Button(hdr, text=" 手动录入", command=self._manual_entry, bg=GRN, fg="#000", font=("Segoe UI",10), relief="flat", padx=16, pady=4, cursor="hand2")
+        self.mbtn.pack(side=tk.RIGHT, padx=(0,8))
+        self.rbtn = tk.Button(hdr, text=" 刷新数据", command=self.refresh, bg=ACC, fg="#fff", font=("Segoe UI",10), relief="flat", padx=16, pady=4, cursor="hand2")
+        self.rbtn.pack(side=tk.RIGHT)
+        self.nb = ttk.Notebook(root)
+        self.nb.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        self.pf = ttk.Frame(self.nb)
+        self.sf = ttk.Frame(self.nb)
+        self.tf = ttk.Frame(self.nb)
+        self.hf = ttk.Frame(self.nb)
+        self.mf = ttk.Frame(self.nb)
+        self.nb.add(self.pf, text="  预测  ")
+        self.nb.add(self.sf, text="  分析  ")
+        self.nb.add(self.tf, text="  走势  ")
+        self.nb.add(self.hf, text="  历史  ")
+        self.nb.add(self.mf, text="  模型  ")
+        self.zf = ttk.Frame(self.nb)
+        self.ff = ttk.Frame(self.nb)
+        self.nb.add(self.zf, text="  生肖追踪  ")
+        self.nb.add(self.ff, text="  采集  ")
+        self._init_predict()
+        self._init_stats()
+        self._init_trend()
+        self._init_history()
+        self._init_ml()
+        self._init_zodiac_track()
+        self._init_data_mgr()
+        threading.Thread(target=self._load, daemon=True).start()
+
+    def _card(self, parent, title, sub="", acc=ACC):
+        c = tk.Frame(parent, bg=CARD, highlightbackground=BDR, highlightthickness=1)
+        inner = tk.Frame(c, bg=CARD)
+        inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
+        tk.Label(inner, text=title, font=("Segoe UI",13,"bold"), fg=acc, bg=CARD).pack(anchor="w")
+        if sub:
+            tk.Label(inner, text=sub, font=("Segoe UI",9), fg=SUB, bg=CARD).pack(anchor="w", pady=(2,8))
+        return c, inner
+
+    def _load(self):
+        self.data = sorted(load_data(), key=lambda x: int(x.get("expect",0)))
+        if self.data:
+            self.analyzer = LotteryAnalyzer(self.data)
+            self.ensemble = EnsemblePredictor(self.analyzer)
+            self.root.after(0, self._ready)
+        else:
+            self.status_var.set("无本地数据，正在从网络获取...")
+            self.root.after(100, self.refresh)
+    def refresh(self):
+        self.status_var.set("刷新中...")
+        self.rbtn.config(state=tk.DISABLED)
+        def r():
+            nd = fetch_data()
+            if nd:
+                ex = set()
+                if os.path.exists(DATA_FILE):
+                    ex = {d["expect"] for d in load_data()}
+                ad = [d for d in nd if d.get("expect") not in ex]
+                old = load_data() if os.path.exists(DATA_FILE) else []
+                all_d = sorted(old + ad, key=lambda x: int(x.get("expect",0)))
+                save_data(all_d)
+                self.data = all_d
+            else:
+                self.data = load_data()
+            self.analyzer = LotteryAnalyzer(self.data)
+            self.ensemble = EnsemblePredictor(self.analyzer)
+            self.root.after(0, self._ready)
+            self.root.after(0, lambda: self.rbtn.config(state=tk.NORMAL))
+        threading.Thread(target=r, daemon=True).start()
+
+    def _ready(self):
+        if not self.data:
+            self.status_var.set("加载失败，请检查网络并点击刷新")
+            return
+        lt = self.data[-1]
+        self.status_var.set(" {} 条记录 | 最新: #{}".format(len(self.data), lt.get("expect","?")))
+        self.rbtn.config(state=tk.NORMAL)
+        self._up_predict()
+        self._up_stats()
+        self._up_trend()
+        self._up_history()
+        self._up_zodiac_track()
+        self._up_ml()
+    def _init_predict(self):
+        m = tk.Frame(self.pf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        ci, ii = self._card(m, "最新开奖", acc=GLD)
+        ci.pack(fill=tk.X, pady=(0,12))
+        self.ll = tk.Label(ii, text="加载中...", font=("Segoe UI",10), fg=TXT, bg=CARD, justify=tk.LEFT, wraplength=900)
+        self.ll.pack(fill=tk.X)
+        sf = tk.Frame(m, bg=BG)
+        sf.pack(fill=tk.X, pady=(0,10))
+        tk.Label(sf, text="模型:", fg=SUB, bg=BG, font=("Segoe UI",10)).pack(side=tk.LEFT, padx=(0,8))
+        self.mv = tk.StringVar(value="集成模型")
+        mm = ttk.Combobox(sf, textvariable=self.mv, values=["集成模型","Markov Chain","Monte Carlo","Weighted EMA","Frequency"], state="readonly", width=16)
+        mm.pack(side=tk.LEFT)
+        mm.bind("<<ComboboxSelected>>", lambda e: self._up_predict())
+        tk.Button(sf, text="开始预测", command=self._up_predict, bg=GRN, fg="#000", font=("Segoe UI",10,"bold"), relief="flat", padx=16, pady=4, cursor="hand2").pack(side=tk.RIGHT)
+        g = tk.Frame(m, bg=BG)
+        g.pack(fill=tk.BOTH, expand=True)
+        c1, i1 = self._card(g, "三连肖", "最可能出现的 前三", GRN)
+        c1.grid(row=0, column=0, sticky="nsew", padx=(0,6), pady=6)
+        self.tl = tk.Label(i1, text="---", font=("Segoe UI",24,"bold"), fg=GRN, bg=CARD)
+        self.tl.pack(anchor="w", pady=4)
+        c2, i2 = self._card(g, "四连肖", "最可能出现的 前四", ACC)
+        c2.grid(row=0, column=1, sticky="nsew", padx=(6,0), pady=6)
+        self.ql = tk.Label(i2, text="---", font=("Segoe UI",20,"bold"), fg=ACC, bg=CARD)
+        self.ql.pack(anchor="w", pady=4)
+        c5, i5 = self._card(g, "一码中特", "集成模型最推荐号码", GLD)
+        c5.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=6)
+        self.om_frame = tk.Frame(i5, bg=CARD)
+        self.om_label = tk.Label(self.om_frame, text="---", font=("Segoe UI", 48, "bold"), fg=GLD, bg=CARD)
+        self.om_label.pack(side=tk.LEFT, padx=10)
+        self.om_info = tk.Label(self.om_frame, text="", font=("Segoe UI", 11), fg=SUB, bg=CARD, justify=tk.LEFT)
+        self.om_info.pack(side=tk.LEFT, padx=10, pady=8)
+        self.om_frame.pack(anchor="center", pady=10)
+        c3, i3 = self._card(g, "特码预测", "频率 + 近期罚分 + 冷号加分", RED)
+        c3.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=6)
+        self.sl_frame = tk.Frame(i3, bg=CARD)
+        self.sl_labels = []
+        self.sl_frame.pack(anchor="w", pady=4, fill=tk.X)
+        c4, i4 = self._card(g, "提示", "以上结果为统计推测，仅供参考", PUR)
+        c4.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=6)
+        self.cl = tk.Label(i4, text="", font=("Segoe UI",9), fg=PUR, bg=CARD, justify=tk.LEFT)
+        self.cl.pack(fill=tk.X)
+        g.columnconfigure(0, weight=1)
+        g.columnconfigure(1, weight=1)
+
+    def _up_predict(self):
+        if not self.ensemble:
+            return
+        a = self.analyzer
+        lt = self.data[-1]
+        nums = a.get_numbers(lt)
+        zods = a.get_zodiacs(lt)
+        ns = "  ".join("{}".format(n)+"("+num_to_zodiac(n)+")" for n in nums)
+        self.ll.config(text="#" + str(lt.get("expect","?")) + " | " + str(lt.get("openTime","")) + chr(10) + ns)
+        m = self.mv.get()
+        if m == "Markov Chain":
+            t = self.ensemble.markov.predict_zodiacs(3)
+            q = self.ensemble.markov.predict_zodiacs(4)
+            s = self.ensemble.markov.predict_specials(7)
+        elif m == "Monte Carlo":
+            t = self.ensemble.monte.predict_zodiacs(3)
+            q = self.ensemble.monte.predict_zodiacs(4)
+            s = self.ensemble.monte.predict_specials(7)
+        elif m == "Weighted EMA":
+            t = self.ensemble.ema.predict_zodiacs(3)
+            q = self.ensemble.ema.predict_zodiacs(4)
+            s = self.ensemble.ema.predict_specials(7)
+        elif m == "Frequency":
+            t = a.predict_triple_zodiac()
+            q = a.predict_quad_zodiac()
+            s = a.predict_special_codes(7)
+        else:
+            t = self.ensemble.predict_zodiacs(3)
+            q = self.ensemble.predict_zodiacs(4)
+            s = self.ensemble.predict_specials(7)
+        self.tl.config(text="  ".join("[{}]".format(z) for z in t))
+        self.ql.config(text="  ".join("[{}]".format(z) for z in q))
+        for w in self.sl_labels:
+            w.destroy()
+        self.sl_labels.clear()
+        for n in s:
+            wave_name, wave_color = num_to_wave(n)
+            lbl = tk.Label(self.sl_frame, text="{:02d}({})".format(n, num_to_zodiac(n)),
+                          font=("Segoe UI", 16, "bold"), fg=wave_color, bg=CARD,
+                          padx=6, pady=2)
+            lbl.pack(side=tk.LEFT)
+            self.sl_labels.append(lbl)
+        from datetime import datetime
+        waves = self.ensemble.predict_waves(2)
+        oe_pred = self.ensemble.predict_odd_even(2)
+        # 一码中特
+        top_one = s[0]
+        oz = num_to_zodiac(top_one)
+        ow, oc = num_to_wave(top_one)
+        ooe, ooec = num_to_odd_even(top_one)
+        self.om_label.config(text="{:02d}".format(top_one), fg=oc)
+        top_house = self.ensemble._house_strategy().get(top_one, 0.5)
+        self.om_info.config(
+            text="生肖: {}   波色: {}   单双: {} | 庄家意愿: {:.0%}".format(
+                oz, ow, ooe, top_house),
+            fg=oc)
+        self.cl.config(text="模型: {} | {} 条数据 | 波色: {} | 单双: {} | {}".format(
+            m, len(self.data), "/".join(waves), "/".join(oe_pred), datetime.now().strftime("%Y-%m-%d %H:%M")))
+
+    def _init_stats(self):
+        m = tk.Frame(self.sf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        L = tk.Frame(m, bg=BG)
+        L.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,8))
+        R = tk.Frame(m, bg=BG)
+        R.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8,0))
+        c1, i1 = self._card(L, "号码频率", acc=GRN)
+        c1.pack(fill=tk.BOTH, expand=True, pady=(0,6))
+        self.ft = tk.Text(i1, bg=BG, fg=GRN, font=("Consolas",9), height=14, relief="flat", padx=4, pady=2, wrap=tk.WORD)
+        self.ft.pack(fill=tk.BOTH, expand=True)
+        c2, i2 = self._card(L, "冷热号", acc=RED)
+        c2.pack(fill=tk.BOTH, expand=True, pady=(6,0))
+        self.ht = tk.Text(i2, bg=BG, fg=TXT, font=("Segoe UI",10), height=8, relief="flat", padx=4, pady=2)
+        self.ht.pack(fill=tk.BOTH, expand=True)
+        c3, i3 = self._card(R, "生肖频率", acc=GLD)
+        c3.pack(fill=tk.BOTH, expand=True, pady=(0,6))
+        self.zt = tk.Text(i3, bg=BG, fg=GLD, font=("Consolas",10), height=14, relief="flat", padx=4, pady=2, wrap=tk.WORD)
+        self.zt.pack(fill=tk.BOTH, expand=True)
+        c4, i4 = self._card(R, "特码预测", acc=ORG)
+        c4.pack(fill=tk.BOTH, expand=True, pady=(6,0))
+        self.st = tk.Text(i4, bg=BG, fg=ORG, font=("Consolas",9), height=8, relief="flat", padx=4, pady=2)
+        self.st.pack(fill=tk.BOTH, expand=True)
+
+    def _up_stats(self):
+        if not self.analyzer:
+            return
+        a = self.analyzer
+        nc, zc = a.frequency_stats(100)
+        self.ft.delete(1.0, tk.END)
+        for n in range(1,50):
+            c = nc.get(n,0)
+            bar = chr(9608) * min(c, 40)
+            tag = "热" if c > 15 else ("冷" if c < 8 else "")
+            z = num_to_zodiac(n)
+            self.ft.insert(tk.END, "{:02d}({}) {} {}{}".format(n, z, bar, c, tag) + chr(10))
+        hot, cold, _ = a.hot_cold_numbers(50)
+        self.ht.delete(1.0, tk.END)
+        self.ht.insert(tk.END, "热号: ", "hot")
+        self.ht.insert(tk.END, " ".join("{:02d}({})".format(x, num_to_zodiac(x)) for x in hot))
+        self.ht.insert(tk.END, "\n\nCOLD: ", "cold")
+        self.ht.insert(tk.END, " ".join("{:02d}({})".format(x, num_to_zodiac(x)) for x in cold))
+        self.ht.tag_config("hot", foreground=RED, font=("Segoe UI",10,"bold"))
+        self.ht.tag_config("cold", foreground=ACC, font=("Segoe UI",10,"bold"))
+        self.zt.delete(1.0, tk.END)
+        for z in sorted(ZODIAC_MAP, key=lambda x: zc.get(x,0), reverse=True):
+            c = zc.get(z,0)
+            self.zt.insert(tk.END, "{}  {} {}".format(z, chr(9608) * min(c, 40), c) + chr(10))
+        sp = a.special_code_history(30)
+        self.st.delete(1.0, tk.END)
+        sc = Counter(s["number"] for s in sp)
+        for n, c in sc.most_common(20):
+            self.st.insert(tk.END, "{:02d}({}) x{}  ".format(n, num_to_zodiac(n), c))
+        self.st.insert(tk.END, "\n\n--- 近期特码 ---\n")
+        for s in reversed(sp[-15:]):
+            self.st.insert(tk.END, "{} -> {:02d}({})".format(s["expect"], s["number"], s["zodiac"]) + chr(10))
+
+        wc = a.wave_stats(100)
+        oc = a.odd_even_stats(100)
+        self.st.insert(tk.END, "\n--- 波色分布(近100期) ---\n")
+        for w in ["红波", "蓝波", "绿波"]:
+            c = wc.get(w, 0)
+            bar = chr(9608) * min(c, 30)
+            self.st.insert(tk.END, "{}: {} {}\n".format(w, bar, c))
+        self.st.insert(tk.END, "\n--- 单双分布(近100期) ---\n")
+        total_oe = sum(oc.values()) or 1
+        self.st.insert(tk.END, "单: {} ({:.0f}%)  双: {} ({:.0f}%)\n".format(
+            oc.get("单",0), oc.get("单",0)/total_oe*100,
+            oc.get("双",0), oc.get("双",0)/total_oe*100))
+
+    def _init_trend(self):
+        m = tk.Frame(self.tf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        c1, i1 = self._card(m, "号码分布矩阵（近50期）", acc=GLD)
+        c1.pack(fill=tk.BOTH, expand=True)
+        tf = tk.Frame(i1, bg=CARD)
+        tf.pack(fill=tk.BOTH, expand=True)
+        self.tt = tk.Text(tf, bg=BG, fg=TXT, font=("Consolas",9), relief="flat", padx=8, pady=4)
+        sb = tk.Scrollbar(tf, command=self.tt.yview)
+        self.tt.configure(yscrollcommand=sb.set)
+        self.tt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _up_trend(self):
+        if not self.analyzer:
+            return
+        a = self.analyzer
+        self.tt.delete(1.0, tk.END)
+        self.tt.insert(tk.END, "{:>6} {:>12} {:>49} {}\n".format("期号", "日期", "矩阵", "生肖"), "hdr")
+        self.tt.insert(tk.END, "-" * 120 + "\n")
+        for r in reversed(self.data[-50:]):
+            ex = r.get("expect","")[-4:]
+            ts = (r.get("openTime","") or "")[:10]
+            nums = a.get_numbers(r)
+            zods = a.get_zodiacs(r)
+            parts = []
+            for n in range(1,50):
+                if len(nums) >= 7 and n == nums[6]:
+                    parts.append("*")
+                elif n in nums[:6]:
+                    parts.append("O")
+                else:
+                    parts.append(".")
+            self.tt.insert(tk.END, "{:>6} {} {} ".format(ex, ts, "".join(parts)))
+            if zods:
+                self.tt.insert(tk.END, " ".join(zods[:6]) + " | " + (zods[6] if len(zods) >= 7 else ""))
+            self.tt.insert(tk.END, "\n")
+        self.tt.insert(tk.END, "\nO 正码  * 特码\n", "leg")
+        self.tt.tag_config("hdr", foreground=GLD, font=("Consolas",9,"bold"))
+        self.tt.tag_config("leg", foreground=SUB, font=("Segoe UI",9))
+
+    def _init_history(self):
+        m = tk.Frame(self.hf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        hdr = tk.Frame(m, bg=BG)
+        hdr.pack(fill=tk.X, pady=(0,12))
+        tk.Label(hdr, text="开奖历史", font=("Segoe UI",16,"bold"), fg=GLD, bg=BG).pack(side=tk.LEFT)
+        cvs = tk.Canvas(m, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(m, orient="vertical", command=cvs.yview)
+        self.his_frame = tk.Frame(cvs, bg=BG)
+        self.his_frame.bind("<Configure>", lambda e: cvs.configure(scrollregion=cvs.bbox("all")))
+        win = cvs.create_window((0, 0), window=self.his_frame, anchor="nw")
+        cvs.configure(yscrollcommand=sb.set)
+        def _on_canvas_resize(event):
+            if event.width > 1:
+                cvs.itemconfig(win, width=event.width)
+        cvs.bind("<Configure>", _on_canvas_resize)
+        cvs.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.his_canvas = cvs
+        def _on_mousewheel(event):
+            cvs.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.his_canvas.bind("<MouseWheel>", _on_mousewheel)
+
+    def _up_history(self):
+        if not self.analyzer:
+            return
+        a = self.analyzer
+        for w in self.his_frame.winfo_children():
+            w.destroy()
+        hdr = tk.Frame(self.his_frame, bg=CARD)
+        hdr.pack(fill=tk.X, pady=(0, 3))
+        for text, w in [("期号", 10), ("开奖时间", 20), ("中奖号码", 64), ("单双", 10)]:
+            tk.Label(hdr, text=text, fg=GLD, bg=CARD, font=("Segoe UI", 12, "bold"), width=w, anchor="w").pack(side=tk.LEFT, padx=3)
+        for r in reversed(self.data[-50:]):
+            row = tk.Frame(self.his_frame, bg=BG)
+            row.pack(fill=tk.X, pady=2)
+            ex = r.get("expect", "")[-4:]
+            ts = (r.get("openTime", "") or "")[:10]
+            nums = a.get_numbers(r)
+            tk.Label(row, text="第{}期".format(ex), fg=TXT, bg=BG, font=("Segoe UI", 11), width=10, anchor="w").pack(side=tk.LEFT, padx=3)
+            tk.Label(row, text=ts, fg=SUB, bg=BG, font=("Segoe UI", 11), width=20, anchor="w").pack(side=tk.LEFT, padx=3)
+            bf = tk.Frame(row, bg=BG)
+            bf.pack(side=tk.LEFT, padx=3)
+            for i_n, n in enumerate(nums):
+                wave_name, wave_color = num_to_wave(n)
+                zodiac = num_to_zodiac(n)
+                if i_n == 6:
+                    tk.Label(bf, text="+", fg=GLD, bg=BG, font=("Segoe UI", 12, "bold")).pack(side=tk.LEFT, padx=3)
+                ball = tk.Frame(bf, bg=wave_color, width=44, height=44)
+                ball.pack_propagate(False)
+                ball.pack(side=tk.LEFT, padx=2)
+                tk.Label(ball, text=str(n), fg="#fff", bg=wave_color, font=("Segoe UI", 11, "bold")).pack()
+                tk.Label(ball, text=zodiac, fg="#fff", bg=wave_color, font=("Segoe UI", 9)).pack()
+            oes = [num_to_odd_even(n) for n in nums[:6]]
+            odd_count = sum(1 for o, _ in oes if o == "单")
+            even_count = 6 - odd_count
+            oe_color = "#ff8c00" if odd_count > even_count else "#8888ff" if even_count > odd_count else SUB
+            tk.Label(row, text="{}单{}双".format(odd_count, even_count), fg=oe_color, bg=BG, font=("Segoe UI", 11), width=10, anchor="w").pack(side=tk.LEFT, padx=3)
+
+
+    def _init_ml(self):
+        m = tk.Frame(self.mf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        c1, i1 = self._card(m, "模型对比", "所有模型并列对比，集成模型加权投票", PUR)
+        c1.pack(fill=tk.BOTH, expand=True)
+        cols = ("模型名称", "三连肖", "四连肖", "特码预测")
+        self.mt = ttk.Treeview(i1, columns=cols, show="headings", height=6)
+        for col in cols:
+            self.mt.heading(col, text=col)
+            self.mt.column(col, width=180 if col != "模型名称" else 140, anchor="w")
+        self.mt.pack(fill=tk.BOTH, expand=True, pady=(0,10))
+        ss = ttk.Style()
+        ss.configure("Treeview", background=CARD, foreground=TXT, fieldbackground=CARD, rowheight=30)
+        ss.configure("Treeview.Heading", background=BG, foreground=GLD, font=("Segoe UI",10,"bold"))
+        ss.map("Treeview", background=[("selected","#1f6feb")])
+        df = tk.Frame(i1, bg=CARD)
+        df.pack(fill=tk.X)
+        desc = "马尔可夫链: 期间转移概率矩阵 | 蒙特卡洛: 2000次随机模拟 | 指数衰减: 衰减系数0.92，近期加权更高 | 频率统计: 计数+遗漏加分 | 集成模型: 加权投票 (0.35/0.25/0.25/0.15)"
+        tk.Label(df, text=desc, font=("Consolas",9), fg=SUB, bg=CARD, justify=tk.LEFT).pack(anchor="w", padx=4)
+
+    def _up_ml(self):
+        if not self.ensemble:
+            return
+        for item in self.mt.get_children():
+            self.mt.delete(item)
+        for model, (zods, specials) in self.ensemble.all_model_results().items():
+            zs = "  ".join("[{}]".format(z) for z in zods)
+            ss_text = "  ".join("{:02d}({})".format(n, num_to_zodiac(n)) for n in specials)
+            tag = "ens" if model == "集成模型" else "norm"
+            self.mt.insert("", tk.END, values=(model, zs, zs, ss_text), tags=(tag,))
+        self.mt.tag_configure("ens", background="#1a2332", font=("Segoe UI",10,"bold"))
+
+    def _init_zodiac_track(self):
+        """生肖特码追踪 - 柱状图展示近180期未开期数"""
+        m = tk.Frame(self.zf, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        hdr = tk.Frame(m, bg=BG)
+        hdr.pack(fill=tk.X, pady=(0,12))
+        tk.Label(hdr, text="特码生肖追踪", font=("Segoe UI",16,"bold"), fg=GLD, bg=BG).pack(side=tk.LEFT)
+        tk.Label(hdr, text="柱高 = 未开期数 | 绿色 = 最新期已开 | 近180期统计", fg=SUB, bg=BG, font=("Segoe UI",9)).pack(side=tk.RIGHT)
+        self.zf_cvs = tk.Canvas(m, bg=BG, highlightthickness=0, height=320)
+        self.zf_cvs.pack(fill=tk.BOTH, expand=True)
+
+    def _up_zodiac_track(self):
+        """生肖特码追踪 - 圆柱体柱状图，12生肖，180期统计"""
+        if not self.analyzer:
+            return
+        a = self.analyzer
+        cvs = self.zf_cvs
+        cvs.delete("all")
+        w = cvs.winfo_width()
+        if w < 100: w = 900
+        h = cvs.winfo_height()
+        if h < 50: h = 320
+        recent = self.data[-180:]
+        gap = {z: 180 for z in ZODIAC_MAP}
+        latest_zodiac = None
+        if recent:
+            nums = a.get_numbers(recent[-1])
+            if len(nums) >= 7:
+                latest_zodiac = num_to_zodiac(nums[6])
+        for i, r in enumerate(reversed(recent)):
+            nums = a.get_numbers(r)
+            if len(nums) >= 7:
+                z = num_to_zodiac(nums[6])
+                if gap[z] == 180:
+                    gap[z] = i
+        n = len(ZODIAC_MAP)
+        bar_w = max((w - 160) // n - 10, 24)
+        max_gap = max(max(gap.values()), 1)
+        base_y = h - 55
+        bar_area_h = h - 100
+        # 背景网格线
+        for level in range(0, max_gap + 1, max(1, max_gap // 5)):
+            ly = base_y - int((level / max_gap) * bar_area_h)
+            cvs.create_line(60, ly, w - 40, ly, fill="#1a2233", width=1, dash=(2, 6))
+            cvs.create_text(50, ly, text=str(level), fill=SUB, font=("Segoe UI", 8), anchor="e")
+        # 基线
+        cvs.create_line(60, base_y, w - 40, base_y, fill=BDR, width=2)
+        # 每根圆柱
+        for idx, z in enumerate(ZODIAC_MAP):
+            g = gap[z]
+            x0 = 70 + idx * (bar_w + 10)
+            x1 = x0 + bar_w
+            bar_h = int((g / max_gap) * bar_area_h) if g > 0 else 6
+            bar_h = max(bar_h, 6)
+            top_y = base_y - bar_h
+            rx = bar_w // 2
+            ry = 6
+            # 颜色分级：绿(已开) → 黄(短) → 橙(中) → 红(长)
+            if g == 0:
+                color, dark, light = GRN, "#1a6b2a", "#7df07d"
+            elif g <= 5:
+                color, dark, light = "#4ae04a", "#1f6b1f", "#90f090"
+            elif g <= 10:
+                color, dark, light = GLD, "#8b6914", "#f0d060"
+            elif g <= 15:
+                color, dark, light = ORG, "#7a4a10", "#f0b040"
+            elif g <= 20:
+                color, dark, light = "#ff6644", "#8b2210", "#ffaa88"
+            else:
+                color, dark, light = RED, "#8b1111", "#ff7070"
+            # 圆柱主体
+            cvs.create_rectangle(x0, top_y + ry, x1, base_y, fill=color, outline="", width=0)
+            # 圆柱暗面（右侧阴影）
+            cvs.create_rectangle(x0 + bar_w * 0.65, top_y + ry, x1, base_y, fill=dark, outline="", width=0, stipple="gray50")
+            # 圆柱顶面椭圆
+            cvs.create_oval(x0, top_y, x1, top_y + ry * 2, fill=light, outline=color, width=1)
+            # 底部椭圆
+            cvs.create_oval(x0, base_y - ry, x1, base_y + ry, fill=dark, outline=color, width=1)
+            # 期数标签（柱顶上方）
+            if g == 0:
+                label = "已开特码"
+            elif g == 1:
+                label = "1期未开"
+            else:
+                label = str(g) + "期未开"
+            cvs.create_text(x0 + bar_w // 2, top_y - 16, text=label, fill=light, font=("Segoe UI", 9, "bold"))
+            # 生肖标签（底部）
+            cvs.create_text(x0 + bar_w // 2, base_y + 18, text=z, fill=TXT, font=("Segoe UI", 12, "bold"))
+            # 最新期已开标记
+            if z == latest_zodiac:
+                cvs.create_text(x0 + bar_w // 2, top_y - 32, text="▼ 最新", fill=GRN, font=("Segoe UI", 8, "bold"))
+        # 标题
+        cvs.create_text(w // 2, 14, text="特码生肖未开期数统计 · 近180期 · 圆柱表", fill=SUB, font=("Segoe UI", 10))
+
+
+    # ===== 手动录入功能 =====
+    def _manual_entry(self):
+        """手动录入开奖数据 - 支持单期/多期"""
+        from datetime import datetime, timedelta
+        
+        latest_expect = 0
+        latest_date = ""
+        if self.data:
+            lt = self.data[-1]
+            latest_expect = int(lt.get("expect", 0))
+            latest_date = (lt.get("openTime", "") or "")[:10]
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        missing_count = 1
+        if latest_date:
+            try:
+                d1 = datetime.strptime(latest_date, "%Y-%m-%d")
+                d2 = datetime.strptime(today, "%Y-%m-%d")
+                gap_days = (d2 - d1).days
+                missing_count = max(1, min(gap_days, 30))
+            except:
+                missing_count = 1
+
+        missing_dates = []
+        if latest_date and missing_count > 1:
+            try:
+                base_d = datetime.strptime(latest_date, "%Y-%m-%d")
+                for i in range(1, missing_count + 1):
+                    d = base_d + timedelta(days=i)
+                    if d <= datetime.strptime(today, "%Y-%m-%d"):
+                        missing_dates.append(d.strftime("%Y-%m-%d"))
+            except:
+                missing_dates = [today]
+        else:
+            missing_dates = [today]
+
+        top = tk.Toplevel(self.root)
+        top.title("手动录入开奖数据")
+        top.configure(bg=BG)
+        rows = len(missing_dates)
+        win_h = min(180 + rows * 62, 700)
+        top.geometry("580x" + str(win_h))
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
+
+        top.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 580) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - win_h) // 2
+        top.geometry("+%d+%d" % (max(0, x), max(0, y)))
+
+        f = tk.Frame(top, bg=BG)
+        f.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        tk.Label(f, text="手动录入开奖数据", font=("Segoe UI", 14, "bold"), fg=GLD, bg=BG).pack(anchor="w")
+        info = "最新: 第%d期 (%s)  |  今日: %s  |  需录入: %d期" % (latest_expect, latest_date, today, len(missing_dates))
+        tk.Label(f, text=info, fg=SUB, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 10))
+
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, height=min(rows * 62, 420))
+        scrollbar = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        entry_frame = tk.Frame(canvas, bg=BG)
+        entry_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=entry_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        entries = []
+        for idx, date_str in enumerate(missing_dates):
+            bg_color = CARD if idx % 2 == 0 else BG
+            bdr_color = BDR if idx % 2 == 0 else BG
+            row_frame = tk.Frame(entry_frame, bg=bg_color, highlightbackground=bdr_color, highlightthickness=1)
+            row_frame.pack(fill=tk.X, pady=1, ipady=2)
+
+            exp_num = latest_expect + idx + 1
+            tk.Label(row_frame, text="第" + str(exp_num) + "期", fg=GLD, bg=bg_color, font=("Segoe UI", 9, "bold"), width=8).pack(side=tk.LEFT, padx=4)
+
+            date_var = tk.StringVar(value=date_str)
+            tk.Entry(row_frame, textvariable=date_var, bg=CARD, fg=TXT, font=("Segoe UI", 8), width=11, relief="flat").pack(side=tk.LEFT, padx=2)
+
+            code_var = tk.StringVar(value="")
+            tk.Entry(row_frame, textvariable=code_var, bg=CARD, fg=TXT, font=("Segoe UI", 10), width=30, relief="flat").pack(side=tk.LEFT, padx=4)
+
+            tk.Label(row_frame, text="6平特+1正特", fg=SUB, bg=bg_color, font=("Segoe UI", 7)).pack(side=tk.LEFT)
+
+            entries.append({"expect": exp_num, "date": date_var, "codes": code_var})
+
+        error_var = tk.StringVar(value="")
+        tk.Label(f, textvariable=error_var, fg=RED, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 0))
+
+        btn_frame = tk.Frame(f, bg=BG)
+        btn_frame.pack(fill=tk.X, pady=(8, 0))
+        tk.Button(btn_frame, text="取消", command=top.destroy, bg=BDR, fg=SUB, font=("Segoe UI", 10),
+                 relief="flat", padx=20, pady=4, cursor="hand2").pack(side=tk.LEFT)
+
+        def save_all():
+            saved = 0
+            for entry in entries:
+                codes_str = entry["codes"].get().strip()
+                if not codes_str:
+                    continue
+                parts = [p.strip() for p in codes_str.replace("，", ",").split(",") if p.strip()]
+                if len(parts) != 7:
+                    continue
+                try:
+                    nums = [int(p) for p in parts]
+                    if not all(1 <= n <= 49 for n in nums):
+                        continue
+                except ValueError:
+                    continue
+
+                expect_num = entry["expect"]
+                date_str = entry["date"].get().strip()
+                codes_fmt = ",".join("%02d" % n for n in nums)
+                new_record = {
+                    "expect": str(expect_num),
+                    "openCode": codes_fmt,
+                    "openTime": date_str + " 21:30:00"
+                }
+                existing = load_data() if os.path.exists(DATA_FILE) else []
+                existing = [d for d in existing if d.get("expect") != str(expect_num)]
+                existing.append(new_record)
+                all_data = sorted(existing, key=lambda x: int(x.get("expect", 0)))
+                save_data(all_data)
+                saved += 1
+
+            if saved > 0:
+                self.data = sorted(load_data(), key=lambda x: int(x.get("expect", 0)))
+                self.analyzer = LotteryAnalyzer(self.data)
+                self.ensemble = EnsemblePredictor(self.analyzer)
+                self._ready()
+                top.destroy()
+                messagebox.showinfo("录入成功", "已录入 %d 期数据" % saved)
+            else:
+                error_var.set("请至少填写一期完整数据（7个号码以逗号分隔）")
+
+        tk.Button(btn_frame, text="确认录入", command=save_all, bg=GRN, fg="#000",
+                 font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=4, cursor="hand2").pack(side=tk.RIGHT)
+
+    def _zodiac_year_config_dialog(self):
+        """生肖年份配置弹窗"""
+        top = tk.Toplevel(self.root)
+        top.title("生肖年份配置")
+        top.configure(bg=BG)
+        top.geometry("520x420")
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
+
+        top.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 520) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 420) // 2
+        top.geometry("+{}+{}".format(max(0, x), max(0, y)))
+
+        f = tk.Frame(top, bg=BG)
+        f.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        tk.Label(f, text="生肖年份配置", font=("Segoe UI", 16, "bold"), fg=GLD, bg=BG).pack(anchor="w")
+        tk.Label(f, text="每年农历新年后生肖对应的起始数字会轮转\n当前默认使用最新年份的映射", fg=SUB, bg=BG, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
+
+        cfg = _load_zodiac_year_config()
+        cfg_frame = tk.Frame(f, bg=CARD, highlightbackground=BDR, highlightthickness=1)
+        cfg_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+
+        header = tk.Frame(cfg_frame, bg=CARD)
+        header.pack(fill=tk.X, padx=12, pady=(10, 4))
+        tk.Label(header, text="年份", fg=GLD, bg=CARD, font=("Segoe UI", 10, "bold"), width=8).pack(side=tk.LEFT)
+        tk.Label(header, text="起始生肖（1号对应）", fg=GLD, bg=CARD, font=("Segoe UI", 10, "bold"), width=20).pack(side=tk.LEFT)
+
+        entries = {}
+        sorted_years = sorted(cfg.keys(), reverse=True)
+        for year in sorted_years:
+            row = tk.Frame(cfg_frame, bg=CARD)
+            row.pack(fill=tk.X, padx=12, pady=2)
+            tk.Label(row, text=str(year), fg=TXT, bg=CARD, font=("Segoe UI", 10), width=8).pack(side=tk.LEFT)
+            var = tk.StringVar(value=cfg[year])
+            cb = ttk.Combobox(row, textvariable=var, values=ZODIAC_MAP, state="readonly", width=16)
+            cb.pack(side=tk.LEFT)
+            entries[year] = var
+
+        def save_config():
+            new_cfg = {}
+            for year, var in entries.items():
+                new_cfg[year] = var.get()
+            with open(ZODIAC_YEAR_FILE, 'w', encoding='utf-8') as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+            global _DEFAULT_ZODIAC_MAP
+            _DEFAULT_ZODIAC_MAP = _get_zodiac_mapping()
+            messagebox.showinfo("保存成功", "生肖年份配置已更新，下次启动生效")
+            top.destroy()
+
+        add_frame = tk.Frame(f, bg=BG)
+        add_frame.pack(fill=tk.X, pady=(0, 12))
+        tk.Label(add_frame, text="添加新年份:", fg=TXT, bg=BG, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        new_year_var = tk.StringVar(value=str(int(sorted_years[0]) + 1) if sorted_years else "2027")
+        tk.Entry(add_frame, textvariable=new_year_var, bg=CARD, fg=TXT, font=("Segoe UI", 9), width=6, relief="flat", insertbackground=TXT).pack(side=tk.LEFT, padx=(0, 8))
+        new_zodiac_var = tk.StringVar(value="鼠")
+        ttk.Combobox(add_frame, textvariable=new_zodiac_var, values=ZODIAC_MAP, state="readonly", width=8).pack(side=tk.LEFT, padx=(0, 8))
+
+        def add_year():
+            y = new_year_var.get().strip()
+            if not y.isdigit():
+                return
+            # 添加新行到显示
+            row = tk.Frame(cfg_frame, bg=CARD)
+            row.pack(fill=tk.X, padx=12, pady=2, before=cfg_frame.winfo_children()[1])
+            tk.Label(row, text=y, fg=TXT, bg=CARD, font=("Segoe UI", 10), width=8).pack(side=tk.LEFT)
+            var = tk.StringVar(value=new_zodiac_var.get())
+            cb = ttk.Combobox(row, textvariable=var, values=ZODIAC_MAP, state="readonly", width=16)
+            cb.pack(side=tk.LEFT)
+            entries[y] = var
+
+        tk.Button(add_frame, text="添加", command=add_year, bg=ACC, fg="#fff", font=("Segoe UI", 9),
+                 relief="flat", padx=12, pady=2, cursor="hand2").pack(side=tk.LEFT)
+
+        btn_frame = tk.Frame(f, bg=BG)
+        btn_frame.pack(fill=tk.X)
+        tk.Button(btn_frame, text="取消", command=top.destroy, bg=BDR, fg=SUB, font=("Segoe UI", 10),
+                 relief="flat", padx=20, pady=4, cursor="hand2").pack(side=tk.LEFT)
+        tk.Button(btn_frame, text="保存配置", command=save_config, bg=GRN, fg="#000",
+                 font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=4, cursor="hand2").pack(side=tk.RIGHT)
+
+
+
+    def _init_data_mgr(self):
+        m = tk.Frame(self.ff, bg=BG)
+        m.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        ctrl = tk.Frame(m, bg=BG)
+        ctrl.pack(fill=tk.X, pady=(0,12))
+        tk.Label(ctrl, text="数据 API", font=("Segoe UI",16,"bold"), fg=GLD, bg=BG).pack(side=tk.LEFT)
+        self.dm_status = tk.Label(ctrl, text="就绪", fg=SUB, bg=BG, font=("Segoe UI",9))
+        self.dm_status.pack(side=tk.RIGHT)
+        yr_row = tk.Frame(m, bg=BG)
+        yr_row.pack(fill=tk.X, pady=(0,8))
+        tk.Label(yr_row, text="数据年份:", fg=TXT, bg=BG, font=("Segoe UI",10)).pack(side=tk.LEFT, padx=(0,8))
+        self.dm_year = tk.StringVar(value="2024,2025,2026")
+        tk.Entry(yr_row, textvariable=self.dm_year, bg=CARD, fg=TXT, font=("Segoe UI",10), width=20, relief="flat").pack(side=tk.LEFT)
+        btn_row = tk.Frame(m, bg=BG)
+        btn_row.pack(fill=tk.X, pady=(0,12))
+        tk.Button(btn_row, text="更新数据", command=self._dm_fetch, bg=GRN, fg="#000",
+                 font=("Segoe UI",10,"bold"), relief="flat", padx=16, pady=4, cursor="hand2").pack(side=tk.LEFT, padx=(0,8))
+        tk.Button(btn_row, text="查看已缓存", command=self._dm_show_cached, bg=ACC, fg="#fff",
+                 font=("Segoe UI",10,"bold"), relief="flat", padx=16, pady=4, cursor="hand2").pack(side=tk.LEFT, padx=(0,8))
+        tk.Button(btn_row, text="清空", command=self._dm_clear, bg=BDR, fg=SUB,
+                 font=("Segoe UI",9), relief="flat", padx=12, pady=4, cursor="hand2").pack(side=tk.RIGHT)
+        c1, i1 = self._card(m, "API 日志", "macaujc.com 直连接口，无需第三方服务", GRN)
+        c1.pack(fill=tk.BOTH, expand=True)
+        self.dm_text = tk.Text(i1, bg=BG, fg=TXT, font=("Consolas",9), relief="flat", padx=8, pady=4, wrap=tk.WORD)
+        sb = tk.Scrollbar(i1, command=self.dm_text.yview)
+        self.dm_text.configure(yscrollcommand=sb.set)
+        self.dm_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _dm_fetch(self):
+        self.dm_status.config(text="获取中...", fg=GLD)
+        self.dm_text.delete(1.0, tk.END)
+        self.dm_text.insert(tk.END, "正在从 macaujc.com API 获取数据...\n")
+        self.root.update()
+        def run():
+            try:
+                years_str = self.dm_year.get().strip()
+                years = [int(y.strip()) for y in years_str.split(",") if y.strip()]
+                nd = macaujc_api.fetch_all(years)
+                msgs = [f"获取完成，共 {len(nd)} 条记录"]
+                if os.path.exists(DATA_FILE):
+                    old = load_data()
+                    ex = {d["expect"] for d in old}
+                    ad = [d for d in nd if d.get("expect") not in ex]
+                    msgs.append(f"新增: {len(ad)} 条")
+                    all_d = sorted(old + ad, key=lambda x: int(x.get("expect",0)))
+                    save_data(all_d)
+                    msgs.append(f"总计: {len(all_d)} 条")
+                else:
+                    save_data(nd)
+                    msgs.append(f"已保存 {len(nd)} 条")
+                self.root.after(0, lambda: self._dm_show("\n".join(msgs), GRN))
+            except Exception as e:
+                self.root.after(0, lambda: self._dm_show(f"获取失败: {e}", RED))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _dm_show_cached(self):
+        self.dm_text.delete(1.0, tk.END)
+        if os.path.exists(DATA_FILE):
+            data = load_data()
+            self.dm_text.insert(tk.END, f"已缓存记录: {len(data)} 条\n")
+            self.dm_text.insert(tk.END, f"文件: {DATA_FILE}\n\n")
+            if data:
+                first = data[0]; last = data[-1]
+                self.dm_text.insert(tk.END, f"第一期: {first['expect']} ({first['openTime']})\n")
+                self.dm_text.insert(tk.END, f"最新期: {last['expect']} ({last['openTime']})\n")
+            self.dm_status.config(text=f"{len(data)} 条", fg=GRN)
+        else:
+            self.dm_text.insert(tk.END, "未找到缓存文件，请先点击更新数据")
+            self.dm_status.config(text="无数据", fg=RED)
+
+    def _dm_show(self, text, color=GRN):
+        self.dm_text.delete(1.0, tk.END)
+        self.dm_text.insert(tk.END, text)
+        self.dm_status.config(text="完成" if color == GRN else "失败", fg=color)
+
+    def _dm_clear(self):
+        self.dm_text.delete(1.0, tk.END)
+        self.dm_status.config(text="就绪", fg=SUB)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    App(root)
+    root.mainloop()

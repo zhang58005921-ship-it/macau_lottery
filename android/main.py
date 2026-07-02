@@ -6,7 +6,12 @@
   - 基准设计宽度 360dp（标准手机）
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_cur = os.path.dirname(os.path.abspath(__file__))
+# shared/ location: dev=../shared, packaged=./shared
+for _sd in [os.path.join(_cur, '..', 'shared'), os.path.join(_cur, 'shared')]:
+    if os.path.isdir(_sd):
+        sys.path.insert(0, _sd)
+sys.path.insert(0, _cur)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import flet as ft
