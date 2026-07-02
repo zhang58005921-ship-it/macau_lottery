@@ -1,0 +1,46 @@
+﻿name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35'
+
+      - name: Install flet
+        run: pip install flet
+
+      - name: Build APK
+        working-directory: apk_build
+        run: |
+          flet build apk --verbose \
+            --org com.macau.lottery \
+            --project macau_lottery_v4pro \
+            --artifact "MacauLotteryV4PRO" \
+            --product "数字游戏预测V4PRO" \
+            --description "澳门六合彩分析预测工具" \
+            --android-permissions INTERNET=true \
+            --build-version 4.0.3 \
+            --yes
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacauLotteryV4PRO-APK
+          path: apk_build/build/apk/**/*.apk

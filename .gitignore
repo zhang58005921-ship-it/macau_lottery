@@ -1,0 +1,25 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.spec
+
+# Build outputs
+build/
+dist/
+*.exe
+
+# IDE
+.vscode/
+.idea/
+
+# App packaging
+*.egg-info/
+.eggs/
+
+# Flet build
+apk_build/build/apk/
+apk_build/build/outputs/
+
+# OS
+.DS_Store
+Thumbs.db
