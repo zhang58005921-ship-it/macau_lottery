@@ -35,35 +35,28 @@ ZODIAC_MAP = ['鼠','牛','虎','兔','龍','蛇','馬','羊','猴','雞','狗',
 
 # ---- shared prediction engine ----
 import sys, os
-_cur = os.path.dirname(os.path.abspath(__file__))
-# Try multiple paths for shared engine (dev + packaged)
-for _sd in [
-    os.path.abspath(os.path.join(_cur, "..", "shared")),
-    os.path.abspath(os.path.join(_cur, "shared")),
-    os.path.abspath(os.path.join(_cur, "..", "..", "shared")),
-]:
-    if os.path.isdir(_sd) and _sd not in sys.path:
-        sys.path.insert(0, _sd)
-        break
-else:
-    # Fallback: if running from project root
-    _fallback = os.path.abspath(os.path.join(_cur, "shared"))
-    if os.path.isdir(_fallback) and _fallback not in sys.path:
-        sys.path.insert(0, _fallback)
-from engine import (
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.abspath(os.path.join(_script_dir, ".."))
+_shared_dir = os.path.join(_project_root, "shared")
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from shared.engine import (
     LotteryAnalyzer, MarkovChainModel, MonteCarloModel, WeightedEMAModel,
     SimpleSpecialPredictor, AdversarialPredictor, EightLinePredictor,
-    EnsemblePredictor, sync_latest,
+    EnsemblePredictor, sync_latest, fetch_data,
     num_to_zodiac, num_to_wuxing, num_to_wave, num_to_odd_even,
     load_data as _engine_load_data, save_data as _engine_save_data,
     ZODIAC_MAP as _ENGINE_ZODIAC_MAP
 )
+from shared import macaujc_api
+import tkinter.messagebox as messagebox
+
 # Override ZODIAC_MAP with engine version
 ZODIAC_MAP[:] = list(_ENGINE_ZODIAC_MAP)
-# Data file redirect to shared/
-DATA_FILE = os.path.join(_sd, 'macaujc_data.json')
-import macaujc_api
-import tkinter.messagebox as messagebox
+# Data file uses shared location
+DATA_FILE = os.path.join(_shared_dir, "macaujc_data.json")
+
 
 def load_data():
     return _engine_load_data()
