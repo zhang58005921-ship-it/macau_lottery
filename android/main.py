@@ -1,4 +1,4 @@
-"""MacauLottery v4PRO — Android APP (Responsive + Android 13/14/15 Compatible)
+﻿"""MacauLottery v4PRO — Android APP (Responsive + Android 13/14/15 Compatible)
 遵循 Android 开发者文档：
   - minSdkVersion 33 (Android 13, 2023+)
   - targetSdkVersion 35 (Android 15, latest)
@@ -15,7 +15,7 @@ sys.path.insert(0, _cur)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import flet as ft
-from engine import (
+from shared.engine import (
     LotteryAnalyzer, AdversarialPredictor, EnsemblePredictor,
     load_data,
     num_to_zodiac, num_to_wave, num_to_odd_even, num_to_wuxing, sync_latest,
