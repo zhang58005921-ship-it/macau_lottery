@@ -37,8 +37,8 @@ jobs:
             --description "Macau Lottery Prediction" \
             --android-permissions INTERNET=true \
             --build-version 4.0.3 \
-            --yes \
-            app_android.py
+            --module-name app_android \
+            --yes
 
       - uses: actions/upload-artifact@v4
         with:
