@@ -1,12 +1,8 @@
-﻿name: Build Android APK
+name: Build Android APK
 
 on:
   push:
     branches: [main, master]
-    paths:
-      - 'android/**'
-      - 'shared/**'
-      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 jobs:
@@ -31,11 +27,7 @@ jobs:
       - name: Install flet
         run: pip install flet
 
-      - name: Copy shared into android
-        run: cp -r shared android/shared
-
       - name: Build APK
-        working-directory: android
         run: |
           flet build apk --verbose \
             --org com.macau.lottery \
@@ -45,9 +37,10 @@ jobs:
             --description "Macau Lottery Prediction" \
             --android-permissions INTERNET=true \
             --build-version 4.0.3 \
-            --yes
+            --yes \
+            app_android.py
 
       - uses: actions/upload-artifact@v4
         with:
           name: MacauLotteryV4PRO-APK
-          path: android/build/apk/**/*.apk
+          path: build/apk/**/*.apk
