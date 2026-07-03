@@ -17,7 +17,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import flet as ft
 from shared.engine import (
     LotteryAnalyzer, AdversarialPredictor, EnsemblePredictor,
-    load_data,
+    load_data, save_data,
     num_to_zodiac, num_to_wave, num_to_odd_even, num_to_wuxing, sync_latest,
     ZODIAC_MAP
 )
@@ -379,7 +379,7 @@ class MacauApp:
             ], accent="#f5c518"))
             
             # 预测
-            pred = self.ensemble.adversarial.predict_specials(8)
+            pred = self.ensemble.predict_specials(8)
             triple = a.predict_triple_zodiac()
             quad = a.predict_quad_zodiac()
             
