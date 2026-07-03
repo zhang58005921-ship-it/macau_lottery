@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 cd /d "%~dp0"
 
@@ -8,11 +8,9 @@ echo ============================================
 
 pyinstaller --onefile --windowed ^
     --name "MacauLotteryV4PRO" ^
-    --add-data "../shared/macaujc_data.json;shared" ^
-    --add-data "../shared/engine.py;shared" ^
-    --add-data "../shared/macaujc_api.py;shared" ^
-    --hidden-import engine ^
-    --hidden-import macaujc_api ^
+    --add-data "../shared;shared" ^
+    --hidden-import shared.engine ^
+    --hidden-import shared.macaujc_api ^
     --hidden-import tkinter ^
     --hidden-import tkinter.ttk ^
     --hidden-import tkinter.messagebox ^
@@ -26,7 +24,8 @@ pyinstaller --onefile --windowed ^
 
 echo.
 echo ============================================
-echo   Build complete!
-echo   Output: dist\MacauLotteryV4PRO.exe
+echo   Build complete! Copying to desktop...
 echo ============================================
+copy /Y "dist\MacauLotteryV4PRO.exe" "%USERPROFILE%\Desktop\MacauLotteryV4PRO.exe"
+echo Done!
 pause

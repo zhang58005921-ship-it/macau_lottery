@@ -1,4 +1,4 @@
-﻿"""MacauLottery v4PRO — Android APP (Responsive + Android 13/14/15 Compatible)
+"""MacauLottery v4PRO — Android APP (Responsive + Android 13/14/15 Compatible)
 遵循 Android 开发者文档：
   - minSdkVersion 33 (Android 13, 2023+)
   - targetSdkVersion 35 (Android 15, latest)
@@ -7,17 +7,19 @@
 """
 import sys, os
 _cur = os.path.dirname(os.path.abspath(__file__))
-# shared/ location: dev=../shared, packaged=./shared
-for _sd in [os.path.join(_cur, '..', 'shared'), os.path.join(_cur, 'shared')]:
-    if os.path.isdir(_sd):
-        sys.path.insert(0, _sd)
+# shared/ location: dev needs macau_lottery/ parent for 'from shared.engine', packaged=./shared
+_parent = os.path.dirname(_cur)  # macau_lottery/
+if os.path.isdir(os.path.join(_parent, 'shared')):
+    sys.path.insert(0, _parent)  # dev: import as 'shared.engine'
+elif os.path.isdir(os.path.join(_cur, 'shared')):
+    sys.path.insert(0, _cur)     # packaged: shared/ is a subdir
 sys.path.insert(0, _cur)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import flet as ft
 from shared.engine import (
     LotteryAnalyzer, AdversarialPredictor, EnsemblePredictor,
-    load_data,
+    load_data, save_data,
     num_to_zodiac, num_to_wave, num_to_odd_even, num_to_wuxing, sync_latest,
     ZODIAC_MAP
 )
@@ -180,6 +182,7 @@ class MacauApp:
             btn("分析", 1),
             btn("历史", 2),
             btn("追踪", 3),
+            btn("风向", 4),
         ]
         self.tab_row = ft.Row(
 
@@ -213,7 +216,7 @@ class MacauApp:
     def show_page(self, idx):
         self._current_tab = idx
         base = "#161b22"
-        colors = [base, base, base, base]
+        colors = [base, base, base, base, base]
         colors[idx] = "#e94560"
         for i, btn in enumerate(self.tab_btns):
             btn.bgcolor = colors[i]
@@ -227,6 +230,8 @@ class MacauApp:
             self.show_history()
         elif idx == 3:
             self.show_zodiac_track()
+        elif idx == 4:
+            self.show_wind()
     
     def load_data(self):
         import traceback
@@ -379,7 +384,7 @@ class MacauApp:
             ], accent="#f5c518"))
             
             # 预测
-            pred = self.ensemble.adversarial.predict_specials(8)
+            pred = self.ensemble.predict_specials(8)
             triple = a.predict_triple_zodiac()
             quad = a.predict_quad_zodiac()
             
@@ -468,6 +473,114 @@ class MacauApp:
         
         self.page.update()
     
+    # ──────────────── 风向页 ────────────────
+    def show_wind(self):
+        """舆论风向 — 散户热度反向策略数据展示"""
+        self.content_area.controls.clear()
+        if not self.ensemble:
+            self.content_area.controls.append(ft.ProgressRing())
+            self.page.update()
+            return
+        
+        crowd = self.ensemble.crowd
+        status = crowd.get_status()
+        fresh = crowd.is_data_fresh()
+        
+        # Header
+        self.content_area.controls.append(
+            ft.Text("\u98ce\u5411\u5206\u6790", size=adp.header_size, weight=ft.FontWeight.BOLD, color="#f5c518")
+        )
+        src_info = f"\u6765\u6e90: {status.get('source','')}  |  \u6570\u636e: {'\u2714 \u5b9e\u65f6' if fresh else '\u2716 \u65e0\u5f53\u5929\u6570\u636e'}"
+        self.content_area.controls.append(ft.Text(src_info, size=adp.small_size, color="#8b949e"))
+        
+        if not fresh:
+            self.content_area.controls.append(self._card([
+                ft.Text(
+                    "\u2601\ufe0f \u65e0\u5f53\u5929\u6570\u636e \u2014 \u98ce\u5411\u6a21\u5757\u4e0d\u53c2\u4e0e\u9884\u6d4b\n\u6743\u91cd 30%\uff0c\u4ec5\u5728\u83b7\u53d6\u5230\u5f53\u5929\u8bba\u575b\u6570\u636e\u65f6\u751f\u6548",
+                    size=adp.body_size, color="#8b949e", text_align=ft.TextAlign.CENTER
+                ),
+            ], accent="#f5c518"))
+            self.page.update()
+            return
+        
+        # Card 1: Recommended Numbers
+        rec = status.get("rec_numbers", [])
+        hot = status.get("hot_numbers", [])
+        
+        if rec:
+            rec_str = " ".join([f"{n:02d}" for n in rec])
+            self.content_area.controls.append(self._card([
+                self._section_title("\u63a8\u8350\u53f7\u7801 (\u6743\u91cd\u21920.5)", "#e94560"),
+                ft.Text(rec_str, size=adp.prediction_size, weight=ft.FontWeight.BOLD, color="#e94560", font_family="monospace"),
+                self._sub_title("\u8bba\u575b/\u9891\u9053\u5927\u91cf\u63a8\u8350\uff0c\u5e84\u5bb6\u53ef\u80fd\u907f\u5f00"),
+            ], accent="#e94560"))
+        
+        # Card 2: Hot Numbers
+        if hot:
+            hot_str = " ".join([f"{n:02d}" for n in hot])
+            self.content_area.controls.append(self._card([
+                self._section_title("\u70ed\u95e8\u53f7\u7801 (\u6743\u91cd\u21920.7)", "#f77f00"),
+                ft.Text(hot_str, size=adp.prediction_size, weight=ft.FontWeight.BOLD, color="#f77f00", font_family="monospace"),
+                self._sub_title("50\u671f\u5185\u9ad8\u9891\u7edf\u8ba1"),
+            ], accent="#f77f00"))
+        
+        # Card 3: Double Confirmed (Extreme Penalty)
+        both = set(rec) & set(hot)
+        if both:
+            both_str = " ".join([f"{n:02d}" for n in sorted(both)])
+            self.content_area.controls.append(self._card([
+                self._section_title("\u26a0\ufe0f \u53cc\u91cd\u547d\u4e2d (\u6743\u91cd\u21920.3)", "#f85149"),
+                ft.Text(both_str, size=adp.prediction_size, weight=ft.FontWeight.BOLD, color="#f85149", font_family="monospace"),
+                self._sub_title("\u63a8\u8350+\u70ed\u95e8\u53cc\u91cd\u786e\u8ba4\uff0c\u5e84\u5bb699%\u4f1a\u907f\u5f00\u8fd9\u4e9b\u53f7\u7801"),
+            ], accent="#f85149"))
+        
+        # Card 4: Kill Signals (Reverse Opportunity)
+        kill_heads = status.get("kill_heads", [])
+        kill_tails = status.get("kill_tails", [])
+        kill_zodiacs = status.get("kill_zodiacs", [])
+        
+        kill_parts = []
+        if kill_heads:
+            kt = "\u6740\u5934: " + ", ".join(map(str, sorted(kill_heads)))
+            kt += "\n(\u8fd9\u4e9b\u5934\u6570\u7684\u53f7\u7801\u6743\u91cd\u52a0\u6210 1.15\u500d)"
+            kill_parts.append(ft.Text(kt, size=adp.body_size, color="#3fb950"))
+        if kill_tails:
+            kill_parts.append(ft.Text("\u6740\u5c3e: " + ", ".join(map(str, sorted(kill_tails))), size=adp.body_size, color="#3fb950"))
+        if kill_zodiacs:
+            kill_parts.append(ft.Text("\u6740\u751f\u8096: " + ", ".join(sorted(kill_zodiacs)) + " (\u6743\u91cd 1.3\u500d)", size=adp.body_size, color="#3fb950"))
+        
+        if kill_parts:
+            self.content_area.controls.append(self._card(
+                [self._section_title("\U0001f4a1 \u6740\u53f7\u4fe1\u53f7 \u2192 \u53cd\u5411\u673a\u4f1a", "#3fb950")] +
+                kill_parts +
+                [self._sub_title("\u9891\u9053\u558a\u6740\u7684\u53f7\u7801\uff0c\u5e84\u5bb6\u53ef\u80fd\u53cd\u5411\u5f00\u51fa")],
+                accent="#3fb950"
+            ))
+        
+        # Card 5: Reverse Weight Distribution
+        weights = crowd.compute_reverse_weights()
+        if weights:
+            heavy = [n for n,w in weights.items() if w <= 0.3]
+            mod = [n for n,w in weights.items() if 0.3 < w <= 0.7]
+            boost = [n for n,w in weights.items() if w > 1.0]
+            
+            weight_parts = [self._section_title("\u53cd\u5411\u6743\u91cd\u5206\u5e03 (30%\u53c2\u4e0e\u9884\u6d4b)", "#f5c518")]
+            if heavy:
+                s = " ".join([f"{n:02d}" for n in heavy[:10]])
+                weight_parts.append(ft.Text(f"\U0001f534 \u6781\u5ea6\u60e9\u7f5a: {s}", size=adp.body_size, color="#f85149", font_family="monospace"))
+            if mod:
+                s = " ".join([f"{n:02d}" for n in mod[:10]])
+                weight_parts.append(ft.Text(f"\U0001f7e0 \u4e2d\u5ea6\u60e9\u7f5a: {s}", size=adp.body_size, color="#f77f00", font_family="monospace"))
+            if boost:
+                s = " ".join([f"{n:02d}" for n in boost[:10]])
+                weight_parts.append(ft.Text(f"\U0001f7e2 \u6743\u91cd\u52a0\u6210: {s}", size=adp.body_size, color="#3fb950", font_family="monospace"))
+            if not heavy and not mod and not boost:
+                weight_parts.append(self._sub_title("\u6240\u6709\u53f7\u7801\u4e2d\u6027\u6743\u91cd 1.0"))
+            
+            self.content_area.controls.append(self._card(weight_parts, accent="#f5c518"))
+        
+        self.page.update()
+
     # ──────────────── 生肖追踪页 ────────────────
     def show_zodiac_track(self):
         """生肖追踪 — 对标 PC 端：180期未开期数柱状图"""
